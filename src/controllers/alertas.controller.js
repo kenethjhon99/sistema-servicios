@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { registrarAuditoria } from "../utils/auditoria.js";
 
 const TIPOS_ALERTA = [
   "SERVICIO_HOY",
@@ -314,7 +315,14 @@ export const generarAlertas = async (req, res) => {
         );
       }
 
-      await client.query(
+      const creditoAnteriorResult = await client.query(
+        `SELECT * FROM creditos WHERE id_credito = $1`,
+        [item.id_credito]
+      );
+
+      const creditoAnterior = creditoAnteriorResult.rows[0];
+
+      const creditoActualizadoResult = await client.query(
         `
           UPDATE creditos
           SET estado = 'VENCIDO',
@@ -322,9 +330,26 @@ export const generarAlertas = async (req, res) => {
           WHERE id_credito = $1
             AND estado <> 'PAGADO'
             AND estado <> 'CANCELADO'
+            AND estado <> 'VENCIDO'
+          RETURNING *
         `,
         [item.id_credito]
       );
+
+      if (creditoActualizadoResult.rows.length > 0) {
+        const creditoActualizado = creditoActualizadoResult.rows[0];
+
+        await registrarAuditoria({
+          tabla_afectada: "creditos",
+          id_registro: creditoActualizado.id_credito,
+          accion: "CAMBIAR_ESTADO",
+          descripcion: `Se marcó el crédito ${creditoActualizado.id_credito} como VENCIDO (orden ${item.numero_orden})`,
+          valores_anteriores: creditoAnterior,
+          valores_nuevos: creditoActualizado,
+          realizado_por: req.user?.id_usuario || null,
+          client,
+        });
+      }
     }
 
     await client.query("COMMIT");
@@ -352,18 +377,14 @@ export const generarAlertas = async (req, res) => {
 export const listarAlertas = async (req, res) => {
   try {
     const { leida, tipo_alerta, modulo_origen, fecha_desde, fecha_hasta } = req.query;
+    const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let query = `
-      SELECT *
-      FROM alertas
-      WHERE 1=1
-    `;
-
+    let whereClause = ` WHERE 1=1 `;
     const values = [];
     let index = 1;
 
     if (leida !== undefined) {
-      query += ` AND leida = $${index}`;
+      whereClause += ` AND leida = $${index}`;
       values.push(leida === "true");
       index++;
     }
@@ -373,33 +394,49 @@ export const listarAlertas = async (req, res) => {
         return res.status(400).json({ error: "Tipo de alerta inválido" });
       }
 
-      query += ` AND tipo_alerta = $${index}`;
+      whereClause += ` AND tipo_alerta = $${index}`;
       values.push(tipo_alerta.toUpperCase());
       index++;
     }
 
     if (modulo_origen) {
-      query += ` AND modulo_origen = $${index}`;
+      whereClause += ` AND modulo_origen = $${index}`;
       values.push(modulo_origen.toUpperCase());
       index++;
     }
 
     if (fecha_desde) {
-      query += ` AND fecha_alerta >= $${index}`;
+      whereClause += ` AND fecha_alerta >= $${index}`;
       values.push(fecha_desde);
       index++;
     }
 
     if (fecha_hasta) {
-      query += ` AND fecha_alerta <= $${index}`;
+      whereClause += ` AND fecha_alerta <= $${index}`;
       values.push(fecha_hasta);
       index++;
     }
 
-    query += ` ORDER BY leida ASC, fecha_alerta DESC, id_alerta DESC`;
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM alertas ${whereClause}`,
+      values
+    );
+    const total = countResult.rows[0].total;
 
-    const { rows } = await pool.query(query, values);
-    return res.json(rows);
+    const dataQuery = `
+      SELECT *
+      FROM alertas
+      ${whereClause}
+      ORDER BY leida ASC, fecha_alerta DESC, id_alerta DESC
+      LIMIT $${index} OFFSET $${index + 1}
+    `;
+
+    const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
+
+    return res.json({
+      data: rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     console.error("Error al listar alertas:", error);
     return res.status(500).json({ error: "Error interno al listar alertas" });
@@ -456,21 +493,35 @@ export const eliminarAlerta = async (req, res) => {
   try {
     const { id } = req.params;
 
+    const anteriorResult = await pool.query(
+      `SELECT * FROM alertas WHERE id_alerta = $1`,
+      [id]
+    );
+
+    if (anteriorResult.rows.length === 0) {
+      return res.status(404).json({ error: "Alerta no encontrada" });
+    }
+
+    const anterior = anteriorResult.rows[0];
+
+    if (anterior.archivada === true) {
+      return res.status(400).json({ error: "La alerta ya está archivada" });
+    }
+
     const query = `
-      DELETE FROM alertas
+      UPDATE alertas
+      SET archivada = true,
+          leida = true
       WHERE id_alerta = $1
       RETURNING *;
     `;
 
     const { rows } = await pool.query(query, [id]);
-
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Alerta no encontrada" });
-    }
+    const alerta = rows[0];
 
     return res.json({
-      mensaje: "Alerta eliminada correctamente",
-      alerta: rows[0],
+      mensaje: "Alerta archivada correctamente",
+      alerta,
     });
   } catch (error) {
     console.error("Error al eliminar alerta:", error);

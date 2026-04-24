@@ -39,7 +39,6 @@ export const crearPago = async (req, res) => {
       monto,
       referencia_pago,
       observaciones,
-      registrado_por,
     } = req.body;
 
     if (!id_cliente) {
@@ -82,20 +81,7 @@ export const crearPago = async (req, res) => {
       }
     }
 
-    if (registrado_por) {
-      const usuarioResult = await pool.query(
-        `SELECT id_usuario, estado FROM usuarios WHERE id_usuario = $1`,
-        [registrado_por]
-      );
-
-      if (usuarioResult.rows.length === 0) {
-        return res.status(404).json({ error: "El usuario que registra el pago no existe" });
-      }
-
-      if (usuarioResult.rows[0].estado !== "ACTIVO") {
-        return res.status(400).json({ error: "El usuario que registra el pago está inactivo" });
-      }
-    }
+    const registradoPor = req.user?.id_usuario || null;
 
     const query = `
       INSERT INTO pagos (
@@ -111,16 +97,7 @@ export const crearPago = async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING *;
     `;
-const pago = rows[0];
 
-await registrarAuditoria({
-  tabla_afectada: "pagos",
-  id_registro: pago.id_pago,
-  accion: "PAGO",
-  descripcion: `Se registró un pago por Q${pago.monto}`,
-  valores_nuevos: pago,
-  realizado_por: req.user?.id_usuario || pago.registrado_por || null,
-});
     const values = [
       id_cliente,
       id_orden_trabajo || null,
@@ -129,11 +106,22 @@ await registrarAuditoria({
       Number(monto),
       referencia_pago?.trim() || null,
       observaciones?.trim() || null,
-      registrado_por || null,
+      registradoPor,
     ];
 
     const { rows } = await pool.query(query, values);
-    return res.status(201).json(rows[0]);
+    const pago = rows[0];
+
+    await registrarAuditoria({
+      tabla_afectada: "pagos",
+      id_registro: pago.id_pago,
+      accion: "PAGO",
+      descripcion: `Se registró un pago por Q${pago.monto}`,
+      valores_nuevos: pago,
+      realizado_por: registradoPor,
+    });
+
+    return res.status(201).json(pago);
   } catch (error) {
     console.error("Error al crear pago:", error);
     return res.status(500).json({ error: "Error interno al crear pago" });
@@ -143,8 +131,56 @@ await registrarAuditoria({
 export const listarPagos = async (req, res) => {
   try {
     const { id_cliente, id_orden_trabajo, metodo_pago, fecha_desde, fecha_hasta } = req.query;
+    const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let query = `
+    let whereClause = ` WHERE 1=1 `;
+    const values = [];
+    let index = 1;
+
+    if (id_cliente) {
+      whereClause += ` AND p.id_cliente = $${index}`;
+      values.push(id_cliente);
+      index++;
+    }
+
+    if (id_orden_trabajo) {
+      whereClause += ` AND p.id_orden_trabajo = $${index}`;
+      values.push(id_orden_trabajo);
+      index++;
+    }
+
+    if (metodo_pago) {
+      whereClause += ` AND p.metodo_pago = $${index}`;
+      values.push(metodo_pago.toUpperCase());
+      index++;
+    }
+
+    if (fecha_desde) {
+      whereClause += ` AND p.fecha_pago >= $${index}`;
+      values.push(fecha_desde);
+      index++;
+    }
+
+    if (fecha_hasta) {
+      whereClause += ` AND p.fecha_pago <= $${index}`;
+      values.push(fecha_hasta);
+      index++;
+    }
+
+    const countResult = await pool.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM pagos p
+        INNER JOIN clientes c ON p.id_cliente = c.id_cliente
+        LEFT JOIN ordenes_trabajo ot ON p.id_orden_trabajo = ot.id_orden_trabajo
+        LEFT JOIN usuarios u ON p.registrado_por = u.id_usuario
+        ${whereClause}
+      `,
+      values
+    );
+    const total = countResult.rows[0].total;
+
+    const dataQuery = `
       SELECT
         p.*,
         c.nombre_completo AS cliente,
@@ -157,46 +193,17 @@ export const listarPagos = async (req, res) => {
         ON p.id_orden_trabajo = ot.id_orden_trabajo
       LEFT JOIN usuarios u
         ON p.registrado_por = u.id_usuario
-      WHERE 1=1
+      ${whereClause}
+      ORDER BY p.fecha_pago DESC, p.id_pago DESC
+      LIMIT $${index} OFFSET $${index + 1}
     `;
 
-    const values = [];
-    let index = 1;
+    const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
 
-    if (id_cliente) {
-      query += ` AND p.id_cliente = $${index}`;
-      values.push(id_cliente);
-      index++;
-    }
-
-    if (id_orden_trabajo) {
-      query += ` AND p.id_orden_trabajo = $${index}`;
-      values.push(id_orden_trabajo);
-      index++;
-    }
-
-    if (metodo_pago) {
-      query += ` AND p.metodo_pago = $${index}`;
-      values.push(metodo_pago.toUpperCase());
-      index++;
-    }
-
-    if (fecha_desde) {
-      query += ` AND p.fecha_pago >= $${index}`;
-      values.push(fecha_desde);
-      index++;
-    }
-
-    if (fecha_hasta) {
-      query += ` AND p.fecha_pago <= $${index}`;
-      values.push(fecha_hasta);
-      index++;
-    }
-
-    query += ` ORDER BY p.fecha_pago DESC, p.id_pago DESC`;
-
-    const { rows } = await pool.query(query, values);
-    return res.json(rows);
+    return res.json({
+      data: rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     console.error("Error al listar pagos:", error);
     return res.status(500).json({ error: "Error interno al listar pagos" });
@@ -328,16 +335,6 @@ export const crearCredito = async (req, res) => {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       RETURNING *;
     `;
-    const credito = rows[0];
-
-await registrarAuditoria({
-  tabla_afectada: "creditos",
-  id_registro: credito.id_credito,
-  accion: "CREAR",
-  descripcion: `Se creó un crédito para la orden ${credito.id_orden_trabajo}`,
-  valores_nuevos: credito,
-  realizado_por: req.user?.id_usuario || null,
-});
 
     const values = [
       id_cliente,
@@ -353,7 +350,18 @@ await registrarAuditoria({
     ];
 
     const { rows } = await pool.query(query, values);
-    return res.status(201).json(rows[0]);
+    const credito = rows[0];
+
+    await registrarAuditoria({
+      tabla_afectada: "creditos",
+      id_registro: credito.id_credito,
+      accion: "CREAR",
+      descripcion: `Se creó un crédito para la orden ${credito.id_orden_trabajo}`,
+      valores_nuevos: credito,
+      realizado_por: req.user?.id_usuario || null,
+    });
+
+    return res.status(201).json(credito);
   } catch (error) {
     console.error("Error al crear crédito:", error);
     return res.status(500).json({ error: "Error interno al crear crédito" });
@@ -363,8 +371,55 @@ await registrarAuditoria({
 export const listarCreditos = async (req, res) => {
   try {
     const { estado, id_cliente, id_orden_trabajo, fecha_desde, fecha_hasta } = req.query;
+    const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let query = `
+    let whereClause = ` WHERE 1=1 `;
+    const values = [];
+    let index = 1;
+
+    if (estado) {
+      whereClause += ` AND cr.estado = $${index}`;
+      values.push(estado.toUpperCase());
+      index++;
+    }
+
+    if (id_cliente) {
+      whereClause += ` AND cr.id_cliente = $${index}`;
+      values.push(id_cliente);
+      index++;
+    }
+
+    if (id_orden_trabajo) {
+      whereClause += ` AND cr.id_orden_trabajo = $${index}`;
+      values.push(id_orden_trabajo);
+      index++;
+    }
+
+    if (fecha_desde) {
+      whereClause += ` AND cr.fecha_vencimiento >= $${index}`;
+      values.push(fecha_desde);
+      index++;
+    }
+
+    if (fecha_hasta) {
+      whereClause += ` AND cr.fecha_vencimiento <= $${index}`;
+      values.push(fecha_hasta);
+      index++;
+    }
+
+    const countResult = await pool.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM creditos cr
+        INNER JOIN clientes c ON cr.id_cliente = c.id_cliente
+        INNER JOIN ordenes_trabajo ot ON cr.id_orden_trabajo = ot.id_orden_trabajo
+        ${whereClause}
+      `,
+      values
+    );
+    const total = countResult.rows[0].total;
+
+    const dataQuery = `
       SELECT
         cr.*,
         c.nombre_completo AS cliente,
@@ -374,46 +429,17 @@ export const listarCreditos = async (req, res) => {
         ON cr.id_cliente = c.id_cliente
       INNER JOIN ordenes_trabajo ot
         ON cr.id_orden_trabajo = ot.id_orden_trabajo
-      WHERE 1=1
+      ${whereClause}
+      ORDER BY cr.fecha_vencimiento ASC, cr.id_credito DESC
+      LIMIT $${index} OFFSET $${index + 1}
     `;
 
-    const values = [];
-    let index = 1;
+    const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
 
-    if (estado) {
-      query += ` AND cr.estado = $${index}`;
-      values.push(estado.toUpperCase());
-      index++;
-    }
-
-    if (id_cliente) {
-      query += ` AND cr.id_cliente = $${index}`;
-      values.push(id_cliente);
-      index++;
-    }
-
-    if (id_orden_trabajo) {
-      query += ` AND cr.id_orden_trabajo = $${index}`;
-      values.push(id_orden_trabajo);
-      index++;
-    }
-
-    if (fecha_desde) {
-      query += ` AND cr.fecha_vencimiento >= $${index}`;
-      values.push(fecha_desde);
-      index++;
-    }
-
-    if (fecha_hasta) {
-      query += ` AND cr.fecha_vencimiento <= $${index}`;
-      values.push(fecha_hasta);
-      index++;
-    }
-
-    query += ` ORDER BY cr.fecha_vencimiento ASC, cr.id_credito DESC`;
-
-    const { rows } = await pool.query(query, values);
-    return res.json(rows);
+    return res.json({
+      data: rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     console.error("Error al listar créditos:", error);
     return res.status(500).json({ error: "Error interno al listar créditos" });
@@ -480,49 +506,53 @@ export const cambiarEstadoCredito = async (req, res) => {
     }
 
     const anteriorResult = await pool.query(
-  `SELECT * FROM creditos WHERE id_credito = $1`,
-  [id]
-);
+      `SELECT * FROM creditos WHERE id_credito = $1`,
+      [id]
+    );
 
-if (anteriorResult.rows.length === 0) {
-  return res.status(404).json({ error: "Crédito no encontrado" });
-}
+    if (anteriorResult.rows.length === 0) {
+      return res.status(404).json({ error: "Crédito no encontrado" });
+    }
 
-const anterior = anteriorResult.rows[0];
+    const anterior = anteriorResult.rows[0];
+    const esCancelacion = estado.toUpperCase() === "CANCELADO";
 
     const query = `
-  UPDATE creditos
-  SET estado = $1,
-      updated_by = $2,
-      updated_at = NOW(),
-      cancelado_por = CASE WHEN $1 = 'CANCELADO' THEN $2 ELSE cancelado_por END,
-      cancelado_en = CASE WHEN $1 = 'CANCELADO' THEN NOW() ELSE cancelado_en END
-  WHERE id_credito = $3
-  RETURNING *;
-`;
+      UPDATE creditos
+      SET estado = $1,
+          updated_by = $2,
+          updated_at = NOW(),
+          cancelado_por = CASE WHEN $1 = 'CANCELADO' THEN $2 ELSE cancelado_por END,
+          cancelado_en = CASE WHEN $1 = 'CANCELADO' THEN NOW() ELSE cancelado_en END
+      WHERE id_credito = $3
+      RETURNING *;
+    `;
 
-const credito = rows[0];
-const esCancelacion = estado.toUpperCase() === "CANCELADO";
-
-await registrarAuditoria({
-  tabla_afectada: "creditos",
-  id_registro: credito.id_credito,
-  accion: esCancelacion ? "CANCELAR" : "CAMBIAR_ESTADO",
-  descripcion: esCancelacion
-    ? `Se canceló el crédito ${credito.id_credito}`
-    : `Se cambió el estado del crédito ${credito.id_credito} a ${credito.estado}`,
-  valores_anteriores: anterior,
-  valores_nuevos: credito,
-  realizado_por: req.user?.id_usuario || null,
-});
-
-    const { rows } = await pool.query(query, [estado.toUpperCase(), id]);
+    const { rows } = await pool.query(query, [
+      estado.toUpperCase(),
+      req.user?.id_usuario || null,
+      id,
+    ]);
 
     if (rows.length === 0) {
       return res.status(404).json({ error: "Crédito no encontrado" });
     }
 
-    return res.json(rows[0]);
+    const credito = rows[0];
+
+    await registrarAuditoria({
+      tabla_afectada: "creditos",
+      id_registro: credito.id_credito,
+      accion: esCancelacion ? "CANCELAR" : "CAMBIAR_ESTADO",
+      descripcion: esCancelacion
+        ? `Se canceló el crédito ${credito.id_credito}`
+        : `Se cambió el estado del crédito ${credito.id_credito} a ${credito.estado}`,
+      valores_anteriores: anterior,
+      valores_nuevos: credito,
+      realizado_por: req.user?.id_usuario || null,
+    });
+
+    return res.json(credito);
   } catch (error) {
     console.error("Error al cambiar estado del crédito:", error);
     return res.status(500).json({ error: "Error interno al cambiar estado del crédito" });
@@ -542,7 +572,6 @@ export const aplicarPagoACredito = async (req, res) => {
       monto,
       referencia_pago,
       observaciones,
-      registrado_por,
     } = req.body;
 
     if (!id_credito) {
@@ -592,22 +621,7 @@ export const aplicarPagoACredito = async (req, res) => {
       return res.status(400).json({ error: "El monto excede el saldo pendiente del crédito" });
     }
 
-    if (registrado_por) {
-      const usuarioResult = await client.query(
-        `SELECT id_usuario, estado FROM usuarios WHERE id_usuario = $1`,
-        [registrado_por]
-      );
-
-      if (usuarioResult.rows.length === 0) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ error: "El usuario que registra el pago no existe" });
-      }
-
-      if (usuarioResult.rows[0].estado !== "ACTIVO") {
-        await client.query("ROLLBACK");
-        return res.status(400).json({ error: "El usuario que registra el pago está inactivo" });
-      }
-    }
+    const registradoPor = req.user?.id_usuario || null;
 
     const pagoResult = await client.query(
       `
@@ -624,7 +638,6 @@ export const aplicarPagoACredito = async (req, res) => {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
         RETURNING *;
       `,
-      
       [
         credito.id_cliente,
         credito.id_orden_trabajo,
@@ -633,21 +646,21 @@ export const aplicarPagoACredito = async (req, res) => {
         montoFinal,
         referencia_pago?.trim() || null,
         observaciones?.trim() || null,
-        registrado_por || null,
+        registradoPor,
       ]
     );
 
-    await registrarAuditoria({
-  client,
-  tabla_afectada: "pagos",
-  id_registro: pago.id_pago,
-  accion: "PAGO",
-  descripcion: `Se registró un pago aplicado a crédito por Q${pago.monto}`,
-  valores_nuevos: pago,
-  realizado_por: req.user?.id_usuario || pago.registrado_por || null,
-});
-
     const pago = pagoResult.rows[0];
+
+    await registrarAuditoria({
+      client,
+      tabla_afectada: "pagos",
+      id_registro: pago.id_pago,
+      accion: "PAGO",
+      descripcion: `Se registró un pago aplicado a crédito por Q${pago.monto}`,
+      valores_nuevos: pago,
+      realizado_por: registradoPor,
+    });
 
     await client.query(
       `
@@ -669,8 +682,6 @@ export const aplicarPagoACredito = async (req, res) => {
       credito.fecha_vencimiento
     );
 
-    
-
     const creditoActualizadoResult = await client.query(
       `
         UPDATE creditos
@@ -683,24 +694,25 @@ export const aplicarPagoACredito = async (req, res) => {
       `,
       [nuevoMontoPagado, nuevoSaldo < 0 ? 0 : nuevoSaldo, nuevoEstado, id_credito]
     );
-const creditoActualizado = creditoActualizadoResult.rows[0];
 
+    const creditoActualizado = creditoActualizadoResult.rows[0];
 
-await registrarAuditoria({
-  client,
-  tabla_afectada: "creditos",
-  id_registro: creditoActualizado.id_credito,
-  accion: "ABONO",
-  descripcion: `Se aplicó un abono de Q${montoFinal} al crédito ${creditoActualizado.id_credito}`,
-  valores_anteriores: credito,
-  valores_nuevos: creditoActualizado,
-  realizado_por: req.user?.id_usuario || pago.registrado_por || null,
-});
+    await registrarAuditoria({
+      client,
+      tabla_afectada: "creditos",
+      id_registro: creditoActualizado.id_credito,
+      accion: "ABONO",
+      descripcion: `Se aplicó un abono de Q${montoFinal} al crédito ${creditoActualizado.id_credito}`,
+      valores_anteriores: credito,
+      valores_nuevos: creditoActualizado,
+      realizado_por: registradoPor,
+    });
+
     await client.query("COMMIT");
 
     return res.status(201).json({
       pago,
-      credito_actualizado: creditoActualizadoResult.rows[0],
+      credito_actualizado: creditoActualizado,
     });
   } catch (error) {
     await client.query("ROLLBACK");

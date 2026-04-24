@@ -1,20 +1,17 @@
 import { Router } from "express";
 import {
-  registrarUsuario,
   loginUsuario,
   perfilUsuario,
 } from "../controllers/auth.controller.js";
-import { authRequired, requireRole } from "../middlewares/auth.middleware.js";
+import { authRequired } from "../middlewares/auth.middleware.js";
+import { loginRateLimiter } from "../middlewares/rateLimit.middleware.js";
 
 const router = Router();
 
-// Solo ADMIN debería crear usuarios en producción
-router.post("/register", authRequired, requireRole("ADMIN"), registrarUsuario);
-
-// Si todavía no tienes ningún usuario, temporalmente puedes quitar authRequired y requireRole
-// router.post("/register", registrarUsuario);
-
-router.post("/login", loginUsuario);
+// Autenticación
+router.post("/login", loginRateLimiter, loginUsuario);
 router.get("/perfil", authRequired, perfilUsuario);
+
+// Para crear usuarios usar POST /usuarios (requiere ADMIN).
 
 export default router;

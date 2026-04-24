@@ -7,14 +7,14 @@ import {
   cambiarEstadoCliente,
 } from "../controllers/clientes.controller.js";
 import { authRequired, requireRole } from "../middlewares/auth.middleware.js";
-
+import { validateIdParam, parsePagination } from "../middlewares/validators.middleware.js";
 
 const router = Router();
 
-router.post("/", authRequired, crearCliente);
-router.get("/", authRequired, listarClientes);
-router.get("/:id", authRequired, obtenerClientePorId);
-router.put("/:id", authRequired, actualizarCliente);
-router.patch("/:id/estado", authRequired, cambiarEstadoCliente);
+router.get("/", authRequired, parsePagination, listarClientes);
+router.get("/:id", authRequired, validateIdParam(), obtenerClientePorId);
+router.post("/", authRequired, requireRole("ADMIN", "SUPERVISOR"), crearCliente);
+router.put("/:id", authRequired, requireRole("ADMIN", "SUPERVISOR"), validateIdParam(), actualizarCliente);
+router.patch("/:id/estado", authRequired, requireRole("ADMIN", "SUPERVISOR"), validateIdParam(), cambiarEstadoCliente);
 
 export default router;

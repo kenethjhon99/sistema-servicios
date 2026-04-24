@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { registrarAuditoria } from "../utils/auditoria.js";
 
 const TIPOS_EVIDENCIA_VALIDOS = ["ANTES", "DESPUES", "GENERAL"];
 
@@ -104,7 +105,18 @@ export const crearEvidencia = async (req, res) => {
     ];
 
     const { rows } = await pool.query(query, values);
-    return res.status(201).json(rows[0]);
+    const evidencia = rows[0];
+
+    await registrarAuditoria({
+      tabla_afectada: "evidencias_orden",
+      id_registro: evidencia.id_evidencia,
+      accion: "CREAR",
+      descripcion: `Se creó la evidencia ${evidencia.id_evidencia} para la orden ${evidencia.id_orden_trabajo}`,
+      valores_nuevos: evidencia,
+      realizado_por: req.user?.id_usuario || null,
+    });
+
+    return res.status(201).json(evidencia);
   } catch (error) {
     console.error("Error al crear evidencia:", error);
     return res.status(500).json({ error: "Error interno al crear evidencia" });
@@ -237,6 +249,18 @@ export const crearMultiplesEvidencias = async (req, res) => {
       evidenciasInsertadas.push(insertResult.rows[0]);
     }
 
+    for (const evidencia of evidenciasInsertadas) {
+      await registrarAuditoria({
+        tabla_afectada: "evidencias_orden",
+        id_registro: evidencia.id_evidencia,
+        accion: "CREAR",
+        descripcion: `Se creó la evidencia ${evidencia.id_evidencia} para la orden ${evidencia.id_orden_trabajo}`,
+        valores_nuevos: evidencia,
+        realizado_por: req.user?.id_usuario || null,
+        client,
+      });
+    }
+
     await client.query("COMMIT");
     return res.status(201).json(evidenciasInsertadas);
   } catch (error) {
@@ -367,6 +391,17 @@ export const actualizarEvidencia = async (req, res) => {
       }
     }
 
+    const anteriorResult = await pool.query(
+      `SELECT * FROM evidencias_orden WHERE id_evidencia = $1`,
+      [id]
+    );
+
+    if (anteriorResult.rows.length === 0) {
+      return res.status(404).json({ error: "Evidencia no encontrada" });
+    }
+
+    const anterior = anteriorResult.rows[0];
+
     const query = `
       UPDATE evidencias_orden
       SET tipo_evidencia = $1,
@@ -377,7 +412,8 @@ export const actualizarEvidencia = async (req, res) => {
           descripcion = $6,
           orden_visual = $7,
           subido_por = $8,
-          fecha_evidencia = $9
+          fecha_evidencia = $9,
+          updated_at = NOW()
       WHERE id_evidencia = $10
       RETURNING *;
     `;
@@ -396,12 +432,19 @@ export const actualizarEvidencia = async (req, res) => {
     ];
 
     const { rows } = await pool.query(query, values);
+    const evidencia = rows[0];
 
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Evidencia no encontrada" });
-    }
+    await registrarAuditoria({
+      tabla_afectada: "evidencias_orden",
+      id_registro: evidencia.id_evidencia,
+      accion: "ACTUALIZAR",
+      descripcion: `Se actualizó la evidencia ${evidencia.id_evidencia}`,
+      valores_anteriores: anterior,
+      valores_nuevos: evidencia,
+      realizado_por: req.user?.id_usuario || null,
+    });
 
-    return res.json(rows[0]);
+    return res.json(evidencia);
   } catch (error) {
     console.error("Error al actualizar evidencia:", error);
     return res.status(500).json({ error: "Error interno al actualizar evidencia" });
@@ -412,21 +455,45 @@ export const eliminarEvidencia = async (req, res) => {
   try {
     const { id } = req.params;
 
+    const anteriorResult = await pool.query(
+      `SELECT * FROM evidencias_orden WHERE id_evidencia = $1`,
+      [id]
+    );
+
+    if (anteriorResult.rows.length === 0) {
+      return res.status(404).json({ error: "Evidencia no encontrada" });
+    }
+
+    const anterior = anteriorResult.rows[0];
+
+    if (anterior.estado === "INACTIVA") {
+      return res.status(400).json({ error: "La evidencia ya está inactiva" });
+    }
+
     const query = `
-      DELETE FROM evidencias_orden
+      UPDATE evidencias_orden
+      SET estado = 'INACTIVA',
+          updated_at = NOW()
       WHERE id_evidencia = $1
       RETURNING *;
     `;
 
     const { rows } = await pool.query(query, [id]);
+    const evidencia = rows[0];
 
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "Evidencia no encontrada" });
-    }
+    await registrarAuditoria({
+      tabla_afectada: "evidencias_orden",
+      id_registro: evidencia.id_evidencia,
+      accion: "CAMBIAR_ESTADO",
+      descripcion: `Se desactivó la evidencia ${evidencia.id_evidencia}`,
+      valores_anteriores: anterior,
+      valores_nuevos: evidencia,
+      realizado_por: req.user?.id_usuario || null,
+    });
 
     return res.json({
-      mensaje: "Evidencia eliminada correctamente",
-      evidencia: rows[0],
+      mensaje: "Evidencia desactivada correctamente",
+      evidencia,
     });
   } catch (error) {
     console.error("Error al eliminar evidencia:", error);

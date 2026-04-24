@@ -90,29 +90,26 @@ export const crearCliente = async (req, res) => {
 export const listarClientes = async (req, res) => {
   try {
     const { estado, tipo_cliente, busqueda } = req.query;
+    const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let query = `
-      SELECT *
-      FROM clientes
-      WHERE 1=1
-    `;
+    let whereClause = ` WHERE 1=1 `;
     const values = [];
     let index = 1;
 
     if (estado) {
-      query += ` AND estado = $${index}`;
+      whereClause += ` AND estado = $${index}`;
       values.push(estado.toUpperCase());
       index++;
     }
 
     if (tipo_cliente) {
-      query += ` AND tipo_cliente = $${index}`;
+      whereClause += ` AND tipo_cliente = $${index}`;
       values.push(tipo_cliente.toUpperCase());
       index++;
     }
 
     if (busqueda) {
-      query += ` AND (
+      whereClause += ` AND (
         nombre_completo ILIKE $${index}
         OR nombre_empresa ILIKE $${index}
         OR telefono ILIKE $${index}
@@ -123,10 +120,26 @@ export const listarClientes = async (req, res) => {
       index++;
     }
 
-    query += ` ORDER BY id_cliente DESC`;
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM clientes ${whereClause}`,
+      values
+    );
+    const total = countResult.rows[0].total;
 
-    const { rows } = await pool.query(query, values);
-    return res.json(rows);
+    const dataQuery = `
+      SELECT *
+      FROM clientes
+      ${whereClause}
+      ORDER BY id_cliente DESC
+      LIMIT $${index} OFFSET $${index + 1}
+    `;
+
+    const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
+
+    return res.json({
+      data: rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     console.error("Error al listar clientes:", error);
     return res.status(500).json({ error: "Error interno al listar clientes" });

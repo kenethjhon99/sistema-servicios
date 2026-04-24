@@ -1,6 +1,7 @@
 import bcrypt from "bcrypt";
 import { pool } from "../config/db.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
+import { validarPassword } from "../utils/password.js";
 
 const ROLES_VALIDOS = ["ADMIN", "SUPERVISOR", "OPERADOR", "COBRADOR"];
 const ESTADOS_VALIDOS = ["ACTIVO", "INACTIVO"];
@@ -8,8 +9,42 @@ const ESTADOS_VALIDOS = ["ACTIVO", "INACTIVO"];
 export const listarUsuarios = async (req, res) => {
   try {
     const { estado, rol, busqueda } = req.query;
+    const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let query = `
+    let whereClause = ` WHERE 1=1 `;
+    const values = [];
+    let index = 1;
+
+    if (estado) {
+      whereClause += ` AND estado = $${index}`;
+      values.push(estado.toUpperCase());
+      index++;
+    }
+
+    if (rol) {
+      whereClause += ` AND rol = $${index}`;
+      values.push(rol.toUpperCase());
+      index++;
+    }
+
+    if (busqueda) {
+      whereClause += ` AND (
+        nombre ILIKE $${index}
+        OR username ILIKE $${index}
+        OR correo ILIKE $${index}
+        OR telefono ILIKE $${index}
+      )`;
+      values.push(`%${busqueda}%`);
+      index++;
+    }
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM usuarios ${whereClause}`,
+      values
+    );
+    const total = countResult.rows[0].total;
+
+    const dataQuery = `
       SELECT
         id_usuario,
         nombre,
@@ -21,39 +56,17 @@ export const listarUsuarios = async (req, res) => {
         created_at,
         updated_at
       FROM usuarios
-      WHERE 1=1
+      ${whereClause}
+      ORDER BY id_usuario DESC
+      LIMIT $${index} OFFSET $${index + 1}
     `;
 
-    const values = [];
-    let index = 1;
+    const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
 
-    if (estado) {
-      query += ` AND estado = $${index}`;
-      values.push(estado.toUpperCase());
-      index++;
-    }
-
-    if (rol) {
-      query += ` AND rol = $${index}`;
-      values.push(rol.toUpperCase());
-      index++;
-    }
-
-    if (busqueda) {
-      query += ` AND (
-        nombre ILIKE $${index}
-        OR username ILIKE $${index}
-        OR correo ILIKE $${index}
-        OR telefono ILIKE $${index}
-      )`;
-      values.push(`%${busqueda}%`);
-      index++;
-    }
-
-    query += ` ORDER BY id_usuario DESC`;
-
-    const { rows } = await pool.query(query, values);
-    return res.json(rows);
+    return res.json({
+      data: rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     console.error("Error al listar usuarios:", error);
     return res.status(500).json({ error: "Error interno al listar usuarios" });
@@ -111,13 +124,11 @@ export const crearUsuario = async (req, res) => {
       return res.status(400).json({ error: "El username es obligatorio" });
     }
 
-    if (!password || password.length < 6) {
-      return res.status(400).json({
-        error: "La contraseña es obligatoria y debe tener al menos 6 caracteres",
-      });
+    const passwordCheck = validarPassword(password);
+    if (!passwordCheck.valid) {
+      return res.status(400).json({ error: passwordCheck.error });
     }
 
-    const ROLES_VALIDOS = ["ADMIN", "SUPERVISOR", "OPERADOR", "COBRADOR"];
     if (!rol || !ROLES_VALIDOS.includes(rol.toUpperCase())) {
       return res.status(400).json({ error: "Rol inválido" });
     }
@@ -209,8 +220,6 @@ export const actualizarUsuario = async (req, res) => {
       username,
       rol,
     } = req.body;
-
-    const ROLES_VALIDOS = ["ADMIN", "SUPERVISOR", "OPERADOR", "COBRADOR"];
 
     if (!nombre || !nombre.trim()) {
       return res.status(400).json({ error: "El nombre es obligatorio" });
@@ -326,8 +335,6 @@ export const cambiarEstadoUsuario = async (req, res) => {
     const { id } = req.params;
     const { estado } = req.body;
 
-    const ESTADOS_VALIDOS = ["ACTIVO", "INACTIVO"];
-
     if (!estado || !ESTADOS_VALIDOS.includes(estado.toUpperCase())) {
       return res.status(400).json({ error: "Estado inválido" });
     }
@@ -414,10 +421,9 @@ export const cambiarMiPassword = async (req, res) => {
       return res.status(400).json({ error: "La contraseña actual es obligatoria" });
     }
 
-    if (!password_nueva || password_nueva.length < 6) {
-      return res.status(400).json({
-        error: "La nueva contraseña es obligatoria y debe tener al menos 6 caracteres",
-      });
+    const passwordCheck = validarPassword(password_nueva);
+    if (!passwordCheck.valid) {
+      return res.status(400).json({ error: passwordCheck.error });
     }
 
     if (password_nueva !== confirmar_password) {
@@ -474,10 +480,9 @@ export const resetearPasswordUsuario = async (req, res) => {
     const { id } = req.params;
     const { password_nueva, confirmar_password } = req.body;
 
-    if (!password_nueva || password_nueva.length < 6) {
-      return res.status(400).json({
-        error: "La nueva contraseña es obligatoria y debe tener al menos 6 caracteres",
-      });
+    const passwordCheck = validarPassword(password_nueva);
+    if (!passwordCheck.valid) {
+      return res.status(400).json({ error: passwordCheck.error });
     }
 
     if (password_nueva !== confirmar_password) {

@@ -218,12 +218,11 @@ export const crearOrdenTrabajo = async (req, res) => {
           observaciones_finales,
           confirmado_por_cliente,
           nombre_recibe,
-          firma_cliente_url
+          firma_cliente_url,
           created_by,
           updated_by
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20, req.user?.id_usuario || null,
-req.user?.id_usuario || null, )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
         RETURNING *;
       `,
       [
@@ -245,6 +244,8 @@ req.user?.id_usuario || null, )
         confirmado_por_cliente ?? false,
         nombre_recibe?.trim() || null,
         firma_cliente_url?.trim() || null,
+        req.user?.id_usuario || null,
+        req.user?.id_usuario || null,
       ]
     );
 
@@ -398,6 +399,16 @@ req.user?.id_usuario || null, )
 
     const ordenFinal = await recalcularTotalesOrden(client, orden.id_orden_trabajo, descuentoFinal);
 
+    await registrarAuditoria({
+      client,
+      tabla_afectada: "ordenes_trabajo",
+      id_registro: ordenFinal.id_orden_trabajo,
+      accion: "CREAR",
+      descripcion: `Se creó la orden ${ordenFinal.numero_orden}`,
+      valores_nuevos: ordenFinal,
+      realizado_por: req.user?.id_usuario || null,
+    });
+
     await client.query("COMMIT");
 
     return res.status(201).json(ordenFinal);
@@ -422,8 +433,74 @@ export const listarOrdenesTrabajo = async (req, res) => {
       tipo_visita,
       origen,
     } = req.query;
+    const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let query = `
+    let whereClause = ` WHERE 1=1 `;
+    const values = [];
+    let index = 1;
+
+    if (estado) {
+      whereClause += ` AND ot.estado = $${index}`;
+      values.push(estado.toUpperCase());
+      index++;
+    }
+
+    if (id_cliente) {
+      whereClause += ` AND ot.id_cliente = $${index}`;
+      values.push(id_cliente);
+      index++;
+    }
+
+    if (id_propiedad) {
+      whereClause += ` AND ot.id_propiedad = $${index}`;
+      values.push(id_propiedad);
+      index++;
+    }
+
+    if (id_cuadrilla) {
+      whereClause += ` AND ot.id_cuadrilla = $${index}`;
+      values.push(id_cuadrilla);
+      index++;
+    }
+
+    if (fecha_desde) {
+      whereClause += ` AND ot.fecha_servicio >= $${index}`;
+      values.push(fecha_desde);
+      index++;
+    }
+
+    if (fecha_hasta) {
+      whereClause += ` AND ot.fecha_servicio <= $${index}`;
+      values.push(fecha_hasta);
+      index++;
+    }
+
+    if (tipo_visita) {
+      whereClause += ` AND ot.tipo_visita = $${index}`;
+      values.push(tipo_visita.toUpperCase());
+      index++;
+    }
+
+    if (origen) {
+      whereClause += ` AND ot.origen = $${index}`;
+      values.push(origen.toUpperCase());
+      index++;
+    }
+
+    const countResult = await pool.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM ordenes_trabajo ot
+        INNER JOIN clientes c ON ot.id_cliente = c.id_cliente
+        INNER JOIN propiedades p ON ot.id_propiedad = p.id_propiedad
+        LEFT JOIN cuadrillas cu ON ot.id_cuadrilla = cu.id_cuadrilla
+        ${whereClause}
+      `,
+      values
+    );
+    const total = countResult.rows[0].total;
+
+    const dataQuery = `
       SELECT
         ot.*,
         c.nombre_completo AS cliente,
@@ -436,64 +513,17 @@ export const listarOrdenesTrabajo = async (req, res) => {
         ON ot.id_propiedad = p.id_propiedad
       LEFT JOIN cuadrillas cu
         ON ot.id_cuadrilla = cu.id_cuadrilla
-      WHERE 1=1
+      ${whereClause}
+      ORDER BY ot.fecha_servicio DESC, ot.id_orden_trabajo DESC
+      LIMIT $${index} OFFSET $${index + 1}
     `;
 
-    const values = [];
-    let index = 1;
+    const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
 
-    if (estado) {
-      query += ` AND ot.estado = $${index}`;
-      values.push(estado.toUpperCase());
-      index++;
-    }
-
-    if (id_cliente) {
-      query += ` AND ot.id_cliente = $${index}`;
-      values.push(id_cliente);
-      index++;
-    }
-
-    if (id_propiedad) {
-      query += ` AND ot.id_propiedad = $${index}`;
-      values.push(id_propiedad);
-      index++;
-    }
-
-    if (id_cuadrilla) {
-      query += ` AND ot.id_cuadrilla = $${index}`;
-      values.push(id_cuadrilla);
-      index++;
-    }
-
-    if (fecha_desde) {
-      query += ` AND ot.fecha_servicio >= $${index}`;
-      values.push(fecha_desde);
-      index++;
-    }
-
-    if (fecha_hasta) {
-      query += ` AND ot.fecha_servicio <= $${index}`;
-      values.push(fecha_hasta);
-      index++;
-    }
-
-    if (tipo_visita) {
-      query += ` AND ot.tipo_visita = $${index}`;
-      values.push(tipo_visita.toUpperCase());
-      index++;
-    }
-
-    if (origen) {
-      query += ` AND ot.origen = $${index}`;
-      values.push(origen.toUpperCase());
-      index++;
-    }
-
-    query += ` ORDER BY ot.fecha_servicio DESC, ot.id_orden_trabajo DESC`;
-
-    const { rows } = await pool.query(query, values);
-    return res.json(rows);
+    return res.json({
+      data: rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     console.error("Error al listar órdenes:", error);
     return res.status(500).json({ error: "Error interno al listar órdenes" });
@@ -561,18 +591,6 @@ export const actualizarOrdenTrabajo = async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    const anteriorOrdenResult = await client.query(
-  `SELECT * FROM ordenes_trabajo WHERE id_orden_trabajo = $1`,
-  [id]
-);
-
-if (anteriorOrdenResult.rows.length === 0) {
-  await client.query("ROLLBACK");
-  return res.status(404).json({ error: "Orden no encontrada" });
-}
-
-const anteriorOrden = anteriorOrdenResult.rows[0];
-
     const { id } = req.params;
     const {
       id_cliente,
@@ -615,15 +633,23 @@ const anteriorOrden = anteriorOrdenResult.rows[0];
       return res.status(400).json({ error: "Debe enviar al menos un detalle de servicio" });
     }
 
-    const existeOrden = await client.query(
-      `SELECT id_orden_trabajo FROM ordenes_trabajo WHERE id_orden_trabajo = $1`,
+    const anteriorOrdenResult = await client.query(
+      `SELECT * FROM ordenes_trabajo WHERE id_orden_trabajo = $1`,
       [id]
     );
 
-    if (existeOrden.rows.length === 0) {
+    if (anteriorOrdenResult.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "Orden no encontrada" });
     }
+
+    const anteriorOrden = anteriorOrdenResult.rows[0];
+
+    const anterioresDetallesResult = await client.query(
+      `SELECT * FROM ordenes_trabajo_detalle WHERE id_orden_trabajo = $1`,
+      [id]
+    );
+    const anterioresDetalles = anterioresDetallesResult.rows;
 
     const tipoVisitaFinal = (tipo_visita || "PROGRAMADA").toUpperCase();
     if (!TIPOS_VISITA_VALIDOS.includes(tipoVisitaFinal)) {
@@ -747,14 +773,32 @@ const anteriorOrden = anteriorOrdenResult.rows[0];
         confirmado_por_cliente ?? false,
         nombre_recibe?.trim() || null,
         firma_cliente_url?.trim() || null,
+        req.user?.id_usuario || null,
         id,
       ]
     );
 
+    // Marcar como CANCELADO los detalles anteriores en vez de borrarlos (no-delete policy)
     await client.query(
-      `DELETE FROM ordenes_trabajo_detalle WHERE id_orden_trabajo = $1`,
+      `
+        UPDATE ordenes_trabajo_detalle
+        SET estado = 'CANCELADO'
+        WHERE id_orden_trabajo = $1
+          AND estado <> 'CANCELADO'
+      `,
       [id]
     );
+
+    await registrarAuditoria({
+      client,
+      tabla_afectada: "ordenes_trabajo_detalle",
+      id_registro: Number(id),
+      accion: "CAMBIAR_ESTADO",
+      descripcion: `Se cancelaron los detalles previos de la orden ${anteriorOrden.numero_orden} por reemplazo`,
+      valores_anteriores: anterioresDetalles,
+      valores_nuevos: null,
+      realizado_por: req.user?.id_usuario || null,
+    });
 
     for (const detalle of detalles) {
       const {
@@ -884,18 +928,42 @@ const anteriorOrden = anteriorOrdenResult.rows[0];
       );
     }
 
-    const ordenFinal = await recalcularTotalesOrden(client, id, descuentoFinal);
+    // Recalcular totales excluyendo los detalles CANCELADOS
+    const subtotalResult = await client.query(
+      `
+        SELECT COALESCE(SUM(subtotal), 0) AS subtotal
+        FROM ordenes_trabajo_detalle
+        WHERE id_orden_trabajo = $1
+          AND estado <> 'CANCELADO'
+      `,
+      [id]
+    );
+    const subtotal = Number(subtotalResult.rows[0].subtotal || 0);
+    const totalOrden = subtotal - descuentoFinal;
 
-   await registrarAuditoria({
-  client,
-  tabla_afectada: "ordenes_trabajo",
-  id_registro: Number(id),
-  accion: "ACTUALIZAR",
-  descripcion: `Se actualizó la orden ${ordenFinal.numero_orden}`,
-  valores_anteriores: anteriorOrden,
-  valores_nuevos: ordenFinal,
-  realizado_por: req.user?.id_usuario || null,
-});
+    const ordenFinalResult = await client.query(
+      `
+        UPDATE ordenes_trabajo
+        SET subtotal = $1,
+            total_orden = $2,
+            updated_at = NOW()
+        WHERE id_orden_trabajo = $3
+        RETURNING *;
+      `,
+      [subtotal, totalOrden < 0 ? 0 : totalOrden, id]
+    );
+    const ordenFinal = ordenFinalResult.rows[0];
+
+    await registrarAuditoria({
+      client,
+      tabla_afectada: "ordenes_trabajo",
+      id_registro: Number(id),
+      accion: "ACTUALIZAR",
+      descripcion: `Se actualizó la orden ${ordenFinal.numero_orden}`,
+      valores_anteriores: anteriorOrden,
+      valores_nuevos: ordenFinal,
+      realizado_por: req.user?.id_usuario || null,
+    });
 
     await client.query("COMMIT");
 
@@ -910,71 +978,81 @@ const anteriorOrden = anteriorOrdenResult.rows[0];
 };
 
 export const cambiarEstadoOrdenTrabajo = async (req, res) => {
+  const client = await pool.connect();
+
   try {
+    await client.query("BEGIN");
+
     const { id } = req.params;
     const { estado, motivo_cancelacion } = req.body;
 
     if (!estado || !ESTADOS_ORDEN_VALIDOS.includes(estado.toUpperCase())) {
+      await client.query("ROLLBACK");
       return res.status(400).json({ error: "Estado inválido" });
     }
 
     if (estado.toUpperCase() === "CANCELADA" && (!motivo_cancelacion || !motivo_cancelacion.trim())) {
+      await client.query("ROLLBACK");
       return res.status(400).json({
         error: "Debe enviar motivo de cancelación al cancelar la orden",
       });
     }
-const anteriorResult = await pool.query(
-  `SELECT * FROM ordenes_trabajo WHERE id_orden_trabajo = $1`,
-  [id]
-);
 
-if (anteriorResult.rows.length === 0) {
-  return res.status(404).json({ error: "Orden no encontrada" });
-}
+    const anteriorResult = await client.query(
+      `SELECT * FROM ordenes_trabajo WHERE id_orden_trabajo = $1`,
+      [id]
+    );
 
-const anterior = anteriorResult.rows[0];
-
-  const esCancelacion = estado.toUpperCase() === "CANCELADA";
-
-const query = `
-  UPDATE ordenes_trabajo
-  SET estado = $1,
-      motivo_cancelacion = $2,
-      updated_by = $3,
-      updated_at = NOW(),
-      cancelado_por = CASE WHEN $1 = 'CANCELADA' THEN $3 ELSE cancelado_por END,
-      cancelado_en = CASE WHEN $1 = 'CANCELADA' THEN NOW() ELSE cancelado_en END
-  WHERE id_orden_trabajo = $4
-  RETURNING *;
-`;
-
-const { rows } = await pool.query(query, [
-  estado.toUpperCase(),
-  motivo_cancelacion?.trim() || null,
-  req.user?.id_usuario || null,
-  id,
-]);
-const orden = rows[0];
-
-await registrarAuditoria({
-  tabla_afectada: "ordenes_trabajo",
-  id_registro: orden.id_orden_trabajo,
-  accion: esCancelacion ? "CANCELAR" : "CAMBIAR_ESTADO",
-  descripcion: esCancelacion
-    ? `Se canceló la orden ${orden.numero_orden}`
-    : `Se cambió el estado de la orden ${orden.numero_orden} a ${orden.estado}`,
-  valores_anteriores: anterior,
-  valores_nuevos: orden,
-  realizado_por: req.user?.id_usuario || null,
-});
-
-    if (rows.length === 0) {
+    if (anteriorResult.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ error: "Orden no encontrada" });
     }
 
-    return res.json(rows[0]);
+    const anterior = anteriorResult.rows[0];
+    const esCancelacion = estado.toUpperCase() === "CANCELADA";
+
+    const query = `
+      UPDATE ordenes_trabajo
+      SET estado = $1,
+          motivo_cancelacion = $2,
+          updated_by = $3,
+          updated_at = NOW(),
+          cancelado_por = CASE WHEN $1 = 'CANCELADA' THEN $3 ELSE cancelado_por END,
+          cancelado_en = CASE WHEN $1 = 'CANCELADA' THEN NOW() ELSE cancelado_en END
+      WHERE id_orden_trabajo = $4
+      RETURNING *;
+    `;
+
+    const { rows } = await client.query(query, [
+      estado.toUpperCase(),
+      motivo_cancelacion?.trim() || null,
+      req.user?.id_usuario || null,
+      id,
+    ]);
+
+    const orden = rows[0];
+
+    await registrarAuditoria({
+      client,
+      tabla_afectada: "ordenes_trabajo",
+      id_registro: orden.id_orden_trabajo,
+      accion: esCancelacion ? "CANCELAR" : "CAMBIAR_ESTADO",
+      descripcion: esCancelacion
+        ? `Se canceló la orden ${orden.numero_orden}`
+        : `Se cambió el estado de la orden ${orden.numero_orden} a ${orden.estado}`,
+      valores_anteriores: anterior,
+      valores_nuevos: orden,
+      realizado_por: req.user?.id_usuario || null,
+    });
+
+    await client.query("COMMIT");
+
+    return res.json(orden);
   } catch (error) {
+    await client.query("ROLLBACK");
     console.error("Error al cambiar estado de orden:", error);
     return res.status(500).json({ error: "Error interno al cambiar estado de orden" });
+  } finally {
+    client.release();
   }
 };

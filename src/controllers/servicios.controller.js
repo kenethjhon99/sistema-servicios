@@ -100,8 +100,46 @@ export const crearServicio = async (req, res) => {
 export const listarServicios = async (req, res) => {
   try {
     const { estado, id_categoria_servicio, busqueda } = req.query;
+    const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let query = `
+    let whereClause = ` WHERE 1=1 `;
+    const values = [];
+    let index = 1;
+
+    if (estado) {
+      whereClause += ` AND s.estado = $${index}`;
+      values.push(estado.toUpperCase());
+      index++;
+    }
+
+    if (id_categoria_servicio) {
+      whereClause += ` AND s.id_categoria_servicio = $${index}`;
+      values.push(id_categoria_servicio);
+      index++;
+    }
+
+    if (busqueda) {
+      whereClause += ` AND (
+        s.nombre ILIKE $${index}
+        OR s.descripcion ILIKE $${index}
+        OR c.nombre ILIKE $${index}
+      )`;
+      values.push(`%${busqueda}%`);
+      index++;
+    }
+
+    const countResult = await pool.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM servicios s
+        INNER JOIN categorias_servicio c ON s.id_categoria_servicio = c.id_categoria_servicio
+        ${whereClause}
+      `,
+      values
+    );
+    const total = countResult.rows[0].total;
+
+    const dataQuery = `
       SELECT
         s.id_servicio,
         s.id_categoria_servicio,
@@ -118,38 +156,17 @@ export const listarServicios = async (req, res) => {
       FROM servicios s
       INNER JOIN categorias_servicio c
         ON s.id_categoria_servicio = c.id_categoria_servicio
-      WHERE 1=1
+      ${whereClause}
+      ORDER BY s.id_servicio DESC
+      LIMIT $${index} OFFSET $${index + 1}
     `;
 
-    const values = [];
-    let index = 1;
+    const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
 
-    if (estado) {
-      query += ` AND s.estado = $${index}`;
-      values.push(estado.toUpperCase());
-      index++;
-    }
-
-    if (id_categoria_servicio) {
-      query += ` AND s.id_categoria_servicio = $${index}`;
-      values.push(id_categoria_servicio);
-      index++;
-    }
-
-    if (busqueda) {
-      query += ` AND (
-        s.nombre ILIKE $${index}
-        OR s.descripcion ILIKE $${index}
-        OR c.nombre ILIKE $${index}
-      )`;
-      values.push(`%${busqueda}%`);
-      index++;
-    }
-
-    query += ` ORDER BY s.id_servicio DESC`;
-
-    const { rows } = await pool.query(query, values);
-    return res.json(rows);
+    return res.json({
+      data: rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     console.error("Error al listar servicios:", error);
     return res.status(500).json({ error: "Error interno al listar servicios" });

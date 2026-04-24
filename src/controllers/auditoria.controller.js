@@ -41,21 +41,10 @@ export const listarAuditorias = async (req, res) => {
       fecha_desde,
       fecha_hasta,
       q,
-      limit,
-      offset,
     } = req.query;
+    const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let query = `
-      SELECT
-        a.*,
-        u.nombre AS realizado_por_nombre,
-        u.username AS realizado_por_username
-      FROM auditoria_eventos a
-      LEFT JOIN usuarios u
-        ON a.realizado_por = u.id_usuario
-      WHERE 1=1
-    `;
-
+    let whereClause = ` WHERE 1=1 `;
     const values = [];
     let index = 1;
 
@@ -64,7 +53,7 @@ export const listarAuditorias = async (req, res) => {
         return res.status(400).json({ error: "tabla_afectada inválida" });
       }
 
-      query += ` AND a.tabla_afectada = $${index}`;
+      whereClause += ` AND a.tabla_afectada = $${index}`;
       values.push(tabla_afectada);
       index++;
     }
@@ -76,31 +65,31 @@ export const listarAuditorias = async (req, res) => {
         return res.status(400).json({ error: "acción inválida" });
       }
 
-      query += ` AND a.accion = $${index}`;
+      whereClause += ` AND a.accion = $${index}`;
       values.push(accionUpper);
       index++;
     }
 
     if (realizado_por) {
-      query += ` AND a.realizado_por = $${index}`;
+      whereClause += ` AND a.realizado_por = $${index}`;
       values.push(realizado_por);
       index++;
     }
 
     if (fecha_desde) {
-      query += ` AND a.fecha_evento >= $${index}`;
+      whereClause += ` AND a.fecha_evento >= $${index}`;
       values.push(fecha_desde);
       index++;
     }
 
     if (fecha_hasta) {
-      query += ` AND a.fecha_evento <= $${index}`;
+      whereClause += ` AND a.fecha_evento <= $${index}`;
       values.push(fecha_hasta);
       index++;
     }
 
     if (q) {
-      query += ` AND (
+      whereClause += ` AND (
         a.descripcion ILIKE $${index}
         OR a.tabla_afectada ILIKE $${index}
         OR a.accion ILIKE $${index}
@@ -110,21 +99,35 @@ export const listarAuditorias = async (req, res) => {
       index++;
     }
 
-    query += ` ORDER BY a.fecha_evento DESC, a.id_auditoria DESC`;
+    const countResult = await pool.query(
+      `
+        SELECT COUNT(*)::int AS total
+        FROM auditoria_eventos a
+        LEFT JOIN usuarios u ON a.realizado_por = u.id_usuario
+        ${whereClause}
+      `,
+      values
+    );
+    const total = countResult.rows[0].total;
 
-    const limitFinal = limit ? Number(limit) : 50;
-    const offsetFinal = offset ? Number(offset) : 0;
+    const dataQuery = `
+      SELECT
+        a.*,
+        u.nombre AS realizado_por_nombre,
+        u.username AS realizado_por_username
+      FROM auditoria_eventos a
+      LEFT JOIN usuarios u
+        ON a.realizado_por = u.id_usuario
+      ${whereClause}
+      ORDER BY a.fecha_evento DESC, a.id_auditoria DESC
+      LIMIT $${index} OFFSET $${index + 1}
+    `;
 
-    query += ` LIMIT $${index} OFFSET $${index + 1}`;
-    values.push(limitFinal, offsetFinal);
-
-    const { rows } = await pool.query(query, values);
+    const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
 
     return res.json({
-      total: rows.length,
-      limit: limitFinal,
-      offset: offsetFinal,
       data: rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (error) {
     console.error("Error al listar auditorías:", error);
