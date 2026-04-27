@@ -13,6 +13,7 @@ import pagosRoutes from "./pagos.routes.js";
 import alertasRoutes from "./alertas.routes.js";
 import resumenesRoutes from "./resumenes.routes.js";
 import agendaRoutes from "./agenda.routes.js";
+import documentosRoutes from "./documentos.routes.js";
 
 const router = Router();
 
@@ -37,5 +38,6 @@ router.use("/alertas", alertasRoutes);
 router.use("/resumenes", resumenesRoutes);
 router.use("/agenda", agendaRoutes);
 router.use("/auditoria", auditoriaRoutes);
+router.use("/documentos", documentosRoutes);
 
 export default router;

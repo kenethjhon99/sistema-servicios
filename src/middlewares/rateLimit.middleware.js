@@ -22,3 +22,21 @@ export const authRateLimiter = rateLimit({
     error: "Demasiadas peticiones al módulo de autenticación.",
   },
 });
+
+/**
+ * Limitador general para toda la API.
+ * Pensado como red de seguridad contra abuso (no como anti-DDoS — eso requiere
+ * infra externa). Defaults conservadores: 600 requests / 15 min por IP.
+ *
+ * Se desactiva en NODE_ENV === "test" para no romper la suite.
+ */
+export const apiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === "test",
+  message: {
+    error: "Demasiadas peticiones. Intenta de nuevo en unos minutos.",
+  },
+});

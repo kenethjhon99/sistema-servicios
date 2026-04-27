@@ -1,5 +1,6 @@
 import { pool } from "../config/db.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
+import { SUPPORTED_LANGS, DEFAULT_LANG } from "../utils/idioma.js";
 
 export const crearCliente = async (req, res) => {
   try {
@@ -15,6 +16,7 @@ export const crearCliente = async (req, res) => {
       direccion_principal,
       tipo_cliente,
       observaciones,
+      idioma_preferido,
     } = req.body;
 
     if (!nombre_completo || !nombre_completo.trim()) {
@@ -24,6 +26,13 @@ export const crearCliente = async (req, res) => {
     const tipo = tipo_cliente ? tipo_cliente.toUpperCase() : "HABITUAL";
     if (!["HABITUAL", "NO_HABITUAL"].includes(tipo)) {
       return res.status(400).json({ error: "Tipo de cliente inválido" });
+    }
+
+    const idioma = idioma_preferido || DEFAULT_LANG;
+    if (!SUPPORTED_LANGS.includes(idioma)) {
+      return res.status(400).json({
+        error: `Idioma preferido inválido. Use: ${SUPPORTED_LANGS.join(", ")}`,
+      });
     }
 
     const query = `
@@ -39,10 +48,11 @@ export const crearCliente = async (req, res) => {
         direccion_principal,
         tipo_cliente,
         observaciones,
+        idioma_preferido,
         created_by,
         updated_by
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       RETURNING *;
     `;
 
@@ -58,6 +68,7 @@ export const crearCliente = async (req, res) => {
       direccion_principal?.trim() || null,
       tipo,
       observaciones?.trim() || null,
+      idioma,
       req.user?.id_usuario || null,
       req.user?.id_usuario || null,
     ];
@@ -184,6 +195,7 @@ export const actualizarCliente = async (req, res) => {
       direccion_principal,
       tipo_cliente,
       observaciones,
+      idioma_preferido,
     } = req.body;
 
     if (!nombre_completo || !nombre_completo.trim()) {
@@ -193,6 +205,13 @@ export const actualizarCliente = async (req, res) => {
     const tipo = tipo_cliente ? tipo_cliente.toUpperCase() : "HABITUAL";
     if (!["HABITUAL", "NO_HABITUAL"].includes(tipo)) {
       return res.status(400).json({ error: "Tipo de cliente inválido" });
+    }
+
+    const idioma = idioma_preferido || DEFAULT_LANG;
+    if (!SUPPORTED_LANGS.includes(idioma)) {
+      return res.status(400).json({
+        error: `Idioma preferido inválido. Use: ${SUPPORTED_LANGS.join(", ")}`,
+      });
     }
 
     const anteriorResult = await pool.query(
@@ -219,9 +238,10 @@ export const actualizarCliente = async (req, res) => {
           direccion_principal = $9,
           tipo_cliente = $10,
           observaciones = $11,
-          updated_by = $12,
+          idioma_preferido = $12,
+          updated_by = $13,
           updated_at = NOW()
-      WHERE id_cliente = $13
+      WHERE id_cliente = $14
       RETURNING *;
     `;
 
@@ -237,6 +257,7 @@ export const actualizarCliente = async (req, res) => {
       direccion_principal?.trim() || null,
       tipo,
       observaciones?.trim() || null,
+      idioma,
       req.user?.id_usuario || null,
       id,
     ];

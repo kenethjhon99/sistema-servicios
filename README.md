@@ -1,526 +1,261 @@
-# Backend · Sistema de Gestión de Servicios de Jardinería y Mantenimiento
+# Backend · Sistema de Gestión de Servicios
 
-Backend API para administrar clientes, propiedades, servicios, programaciones, órdenes de trabajo, evidencias, pagos, créditos, alertas, agenda y control de usuarios por roles.
+Backend API para administrar clientes, propiedades, servicios, programaciones, órdenes de trabajo, evidencias, pagos, créditos, alertas, agenda, auditoría y control de usuarios por roles.
 
----
-
-## Descripción
-
-Este proyecto fue diseñado para empresas que brindan servicios recurrentes y no recurrentes, como:
-
-- jardinería
-- poda
-- limpieza
-- mantenimiento general
-- fumigación
-- reparaciones menores
-- otros servicios de propiedad
-
-El sistema permite operar bajo una lógica flexible basada en servicios, no limitada únicamente a jardinería.
+Diseñado para empresas que prestan servicios recurrentes y no recurrentes (jardinería, poda, limpieza, fumigación, mantenimiento general, reparaciones menores), bajo una lógica flexible basada en servicios — no limitada a una vertical específica.
 
 ---
 
-## Objetivo
+## Stack
 
-Centralizar la gestión operativa y financiera del negocio, permitiendo controlar:
-
-- clientes y múltiples propiedades por cliente
-- servicios y categorías personalizables
-- programaciones recurrentes
-- órdenes de trabajo con múltiples servicios por visita
-- evidencias fotográficas antes, después y generales
-- pagos y créditos
-- alertas y agenda
-- usuarios con autenticación y roles
+- **Node.js** (ESM, type: module)
+- **Express 5** + **helmet** + **cors** + **morgan** + **express-rate-limit**
+- **PostgreSQL** vía **pg** (Pool)
+- **JWT** + **bcrypt** para autenticación
+- **Vitest** + **supertest** para tests (130 tests)
+- Migraciones SQL versionadas con runner Node propio
 
 ---
 
-## Stack tecnológico
-
-- **Node.js**
-- **Express**
-- **PostgreSQL**
-- **JWT**
-- **bcrypt**
-- **dotenv**
-- **pg**
-
----
-
-## Arquitectura general
-
-La lógica principal del sistema es:
-
-**Cliente → Propiedad → Servicio → Programación → Orden de trabajo → Evidencias → Pago/Crédito → Alertas**
-
----
-
-## Estructura sugerida del proyecto
+## Setup rápido
 
 ```bash
-src/
-  config/
-    db.js
-  controllers/
-  routes/
-  middlewares/
-    auth.middleware.js
-  utils/
-    jwt.js
-  app.js
-  index.js
+# 1. Instalar dependencias
+npm install
+
+# 2. Configurar entorno
+cp .env.example .env
+# Editar .env: PG*, JWT_SECRET (mín 16 chars)
+
+# 3. Aplicar schema (sólo si la BD está vacía)
+npm run db:migrate
+
+# 4. Iniciar
+npm run dev
 ```
 
 ---
 
-## Base de datos
+## Variables de entorno
 
-### Tablas principales
+Ver `.env.example`. Todas las variables marcadas como obligatorias son validadas al arrancar — el proceso aborta con un mensaje claro si falta alguna o si `JWT_SECRET` tiene menos de 16 caracteres.
 
-#### Seguridad
-- `usuarios`
-
-#### Catálogo
-- `categorias_servicio`
-- `servicios`
-
-#### Clientes
-- `clientes`
-- `propiedades`
-
-#### Operación
-- `cuadrillas`
-- `empleados`
-- `programaciones_servicio`
-- `ordenes_trabajo`
-- `ordenes_trabajo_detalle`
-- `ordenes_empleados`
-- `evidencias_orden`
-
-#### Financiero
-- `pagos`
-- `creditos`
-- `pagos_credito`
-
-#### Gestión y soporte
-- `alertas`
-- `cotizaciones`
-- `cotizaciones_detalle`
-- `insumos`
-- `movimientos_insumo`
-- `ordenes_insumos`
+| Variable | Default | Notas |
+|---|---|---|
+| `NODE_ENV` | `development` | `production` activa morgan en formato `combined` |
+| `PORT` | `3000` | |
+| `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` | — | obligatorias |
+| `JWT_SECRET` | — | obligatoria, mín 16 chars |
+| `JWT_EXPIRES_IN` | `8h` | |
+| `CORS_ORIGINS` | `*` | lista separada por comas, o `*` para abrir todo (sólo dev) |
+| `RATE_LIMIT_LOGIN_MAX` | `10` | intentos antes de bloquear |
+| `RATE_LIMIT_LOGIN_WINDOW_MIN` | `15` | ventana en minutos |
 
 ---
 
-## Reglas funcionales clave
+## Scripts
 
-### Clientes y propiedades
-- Un cliente puede tener **una o muchas propiedades**.
-- Cada propiedad pertenece a **un solo cliente**.
-- Las propiedades pueden almacenar:
-  - dirección
-  - referencia
-  - contacto que recibe
-  - teléfono de contacto
-  - latitud
-  - longitud
-  - link de mapa
-
-### Servicios
-- El usuario final puede crear sus propias categorías y servicios.
-- El `precio_base` del servicio es **opcional** y solo referencial.
-- El precio real se define en:
-  - programación
-  - cotización
-  - detalle de orden
-
-### Programaciones
-- Una programación representa un servicio recurrente o puntual.
-- Frecuencias válidas:
-  - `UNICA`
-  - `SEMANAL`
-  - `QUINCENAL`
-  - `MENSUAL`
-
-### Órdenes de trabajo
-- Una orden representa una **visita**.
-- Una orden puede tener **múltiples servicios** mediante `ordenes_trabajo_detalle`.
-- Cada detalle puede tener:
-  - cantidad
-  - precio unitario
-  - descripción del precio
-  - subtotal
-  - duración
-  - estado
-  - observaciones
-
-### Evidencias
-- Una orden puede tener muchas evidencias.
-- Tipos soportados:
-  - `ANTES`
-  - `DESPUES`
-  - `GENERAL`
-
-### Créditos
-- Una orden puede pagarse al contado o a crédito.
-- Un crédito puede recibir múltiples abonos.
-- El estado del crédito se recalcula automáticamente.
+| Comando | Qué hace |
+|---|---|
+| `npm run dev` | Servidor con auto-reload (`nodemon`) |
+| `npm start` | Servidor producción |
+| `npm test` | Suite de tests (130, en `~5s`) |
+| `npm run test:watch` | Tests en modo watch |
+| `npm run test:coverage` | Coverage HTML en `coverage/` |
+| `npm run db:migrate` | Aplica migraciones pendientes |
+| `npm run db:status` | Lista migraciones aplicadas vs pendientes |
 
 ---
 
-## Autenticación y roles
+## Estructura
 
-### Autenticación
-- Login con `username` y `password`
-- Contraseñas encriptadas con `bcrypt`
-- Token JWT con middleware `authRequired`
+```
+backend/
+├── migrations/                 ← schema versionado (ver migrations/README.md)
+│   ├── 0001_initial_schema.sql
+│   ├── 0002_indices_recomendados.sql
+│   └── README.md
+├── src/
+│   ├── app.js                  ← Express app: helmet, CORS, rate limit, parsers, 404, error handler
+│   ├── server.js               ← bootstrap + graceful shutdown (SIGTERM/SIGINT)
+│   ├── config/
+│   │   ├── env.js              ← validación fail-fast de env vars
+│   │   └── db.js               ← pg.Pool
+│   ├── controllers/            ← lógica HTTP + SQL por dominio
+│   ├── routes/                 ← express.Router por módulo + index.routes.js
+│   ├── middlewares/
+│   │   ├── auth.middleware.js  ← authRequired + requireRole
+│   │   ├── rateLimit.middleware.js  ← loginRateLimiter, apiRateLimiter
+│   │   └── validators.middleware.js ← validateIdParam, parsePagination
+│   ├── utils/
+│   │   ├── jwt.js              ← createToken / verifyToken
+│   │   ├── password.js         ← validarPassword (≥8 chars, letra+número)
+│   │   ├── auditoria.js        ← registrarAuditoria
+│   │   └── response.js
+│   └── db/
+│       └── migrate.js          ← runner de migraciones
+└── tests/
+    ├── setup.js                ← env vars de test
+    ├── helpers/
+    │   ├── auth.js             ← makeUsuario, primeAuth, tokenFor
+    │   └── poolMock.js
+    ├── unit/                   ← password, jwt, validators, requireRole
+    └── integration/            ← app, auth, usuarios, ordenes, pagos
+```
 
-### Roles definidos
-- `ADMIN`
-- `SUPERVISOR`
-- `OPERADOR`
-- `COBRADOR`
+---
 
-### Uso recomendado de roles
+## Contrato de respuestas API
 
-#### ADMIN
-Acceso total al sistema.
+Estandarizado en Fase 2:
 
-#### SUPERVISOR
-Gestión operativa:
-- clientes
-- propiedades
-- servicios
-- programaciones
-- órdenes
-- evidencias
-- agenda
-- alertas
+```
+GET    /resource             → { data: [...], pagination: { page, limit, total, total_pages } }
+GET    /resource/:id         → objeto recurso directo
+POST   /resource             → objeto recurso recién creado
+PUT    /resource/:id         → objeto recurso actualizado
+PATCH  /resource/:id/...     → objeto recurso actualizado
+```
 
-#### OPERADOR
-Operación de campo:
-- ver agenda
-- ver clientes y propiedades
-- crear/editar órdenes
-- subir evidencias
+**Excepciones documentadas:**
 
-#### COBRADOR
-Gestión financiera:
-- registrar pagos
-- aplicar abonos
-- ver créditos
-- consultar resúmenes financieros
+| Endpoint | Forma | Por qué |
+|---|---|---|
+| `POST /auth/login` | `{ mensaje, token, usuario }` | dos recursos |
+| `GET /auth/perfil` | `{ usuario }` | legacy, frontend lo usa así |
+| `PATCH /usuarios/mi/password` | `{ mensaje }` | sin recurso a devolver |
+| `PATCH /usuarios/:id/reset-password` | `{ mensaje }` | idem |
+| `POST /alertas/generar` | `{ mensaje, resumen: {...} }` | bulk operation |
+| `PATCH /alertas/marcar-todas-leidas` | `{ mensaje, cantidad }` | bulk operation |
+
+Todos los errores siguen `{ error: string }` con código HTTP semántico.
+
+---
+
+## Roles
+
+| Rol | Permisos clave |
+|---|---|
+| **ADMIN** | Acceso total, gestión de usuarios, reset de passwords, cancelar créditos |
+| **SUPERVISOR** | Catálogos, clientes, propiedades, programaciones, crear/cambiar estado órdenes, crear créditos |
+| **OPERADOR** | Crear órdenes, subir evidencias |
+| **COBRADOR** | Registrar pagos, aplicar abonos a créditos |
+
+Aplicado vía `requireRole(...rolesPermitidos)` por ruta. Aislamiento verificado en tests.
 
 ---
 
 ## Endpoints principales
 
 ### Auth
-- `POST /api/auth/login`
+- `POST /api/auth/login` *(rate-limited: 10 intentos / 15 min)*
 - `GET /api/auth/perfil`
-- `POST /api/auth/register`
 
-### Usuarios
-- `GET /api/usuarios`
-- `GET /api/usuarios/:id`
-- `POST /api/usuarios`
-- `PUT /api/usuarios/:id`
-- `PATCH /api/usuarios/:id/estado`
-- `PATCH /api/usuarios/mi/password`
-- `PATCH /api/usuarios/:id/reset-password`
+### Usuarios *(ADMIN)*
+- `GET    /api/usuarios`
+- `GET    /api/usuarios/:id`
+- `POST   /api/usuarios`
+- `PUT    /api/usuarios/:id`
+- `PATCH  /api/usuarios/:id/estado`
+- `PATCH  /api/usuarios/mi/password` *(self-service)*
+- `PATCH  /api/usuarios/:id/reset-password`
 
-### Categorías
-- `POST /api/categorias-servicio`
-- `GET /api/categorias-servicio`
-- `GET /api/categorias-servicio/:id`
-- `PUT /api/categorias-servicio/:id`
-- `PATCH /api/categorias-servicio/:id/estado`
+### Catálogos
+- `/api/categorias-servicio`  (GET/POST/PUT/PATCH)
+- `/api/servicios`            (GET/POST/PUT/PATCH)
 
-### Servicios
-- `POST /api/servicios`
-- `GET /api/servicios`
-- `GET /api/servicios/:id`
-- `PUT /api/servicios/:id`
-- `PATCH /api/servicios/:id/estado`
+### Negocio
+- `/api/clientes`             (GET/POST/PUT/PATCH)
+- `/api/propiedades`          + `/cliente/:id_cliente`
+- `/api/programaciones`
+- `/api/ordenes`              ⚠️ **path es `/ordenes`, no `/ordenes-trabajo`**
+- `/api/evidencias`           (incluye `POST /lote`)
 
-### Clientes
-- `POST /api/clientes`
-- `GET /api/clientes`
-- `GET /api/clientes/:id`
-- `PUT /api/clientes/:id`
-- `PATCH /api/clientes/:id/estado`
+### Financiero
+- `/api/pagos`
+- `/api/pagos/creditos`       + `/lista`, `/aplicar-pago`, `/:id/estado`
 
-### Propiedades
-- `POST /api/propiedades`
-- `GET /api/propiedades`
-- `GET /api/propiedades/cliente/:id_cliente`
-- `GET /api/propiedades/:id`
-- `PUT /api/propiedades/:id`
-- `PATCH /api/propiedades/:id/estado`
-
-### Programaciones
-- `POST /api/programaciones`
-- `GET /api/programaciones`
-- `GET /api/programaciones/:id`
-- `PUT /api/programaciones/:id`
-- `PATCH /api/programaciones/:id/estado`
-
-### Órdenes de trabajo
-- `POST /api/ordenes-trabajo`
-- `GET /api/ordenes-trabajo`
-- `GET /api/ordenes-trabajo/:id`
-- `PUT /api/ordenes-trabajo/:id`
-- `PATCH /api/ordenes-trabajo/:id/estado`
-
-### Evidencias
-- `POST /api/evidencias`
-- `POST /api/evidencias/lote`
-- `GET /api/evidencias/orden/:id_orden_trabajo`
-- `GET /api/evidencias/:id`
-- `PUT /api/evidencias/:id`
-- `DELETE /api/evidencias/:id`
-
-### Pagos y créditos
-- `POST /api/pagos`
-- `GET /api/pagos`
-- `GET /api/pagos/:id`
-- `POST /api/pagos/creditos`
-- `GET /api/pagos/creditos/lista`
-- `GET /api/pagos/creditos/:id`
-- `PATCH /api/pagos/creditos/:id/estado`
-- `POST /api/pagos/creditos/aplicar-pago`
-
-### Alertas
-- `POST /api/alertas/generar`
-- `GET /api/alertas`
-- `PATCH /api/alertas/:id/leida`
-- `PATCH /api/alertas/marcar-todas/leidas`
-- `DELETE /api/alertas/:id`
-
-### Dashboard / Agenda / Resúmenes
-- `GET /api/alertas/dashboard/base`
-- `GET /api/resumenes/orden/:id_orden_trabajo`
-- `GET /api/resumenes/cliente/:id_cliente`
-- `GET /api/agenda/dia`
-- `GET /api/agenda/rango`
-- `GET /api/agenda/mensual`
-- `GET /api/agenda/creditos/vencimientos`
-
----
-
-## Variables de entorno
-
-Crea un archivo `.env` con algo como esto:
-
-```env
-PORT=3000
-
-PGHOST=localhost
-PGPORT=5432
-PGDATABASE=sistema_servicios
-PGUSER=postgres
-PGPASSWORD=tu_password
-PGSSL=false
-
-JWT_SECRET=tu_clave_super_secreta_larga
-JWT_EXPIRES_IN=8h
-```
-
----
-
-## Instalación
-
-```bash
-npm install
-```
-
-### Dependencias necesarias
-
-```bash
-npm install express pg dotenv bcrypt jsonwebtoken
-```
-
-### Dependencia recomendada para desarrollo
-
-```bash
-npm install -D nodemon
-```
-
----
-
-## Ejecución
-
-### Desarrollo
-
-```bash
-npm run dev
-```
-
-### Producción
-
-```bash
-npm start
-```
-
-Ejemplo de scripts en `package.json`:
-
-```json
-{
-  "scripts": {
-    "dev": "nodemon src/index.js",
-    "start": "node src/index.js"
-  }
-}
-```
-
----
-
-## Configuración de conexión a base de datos
-
-Archivo sugerido: `src/config/db.js`
-
-```js
-import pg from "pg";
-import dotenv from "dotenv";
-
-dotenv.config();
-
-const { Pool } = pg;
-
-export const pool = new Pool({
-  host: process.env.PGHOST,
-  port: process.env.PGPORT,
-  database: process.env.PGDATABASE,
-  user: process.env.PGUSER,
-  password: process.env.PGPASSWORD,
-  ssl: process.env.PGSSL === "true" ? { rejectUnauthorized: false } : false,
-});
-```
+### Sistema
+- `/api/auditoria`            (filtros + paginación)
+- `/api/alertas`              + `/generar`, `/dashboard/base`
+- `/api/resumenes/cliente/:id` · `/resumenes/orden/:id`
+- `/api/agenda/dia` · `/rango` · `/mensual` · `/creditos/vencimientos`
 
 ---
 
 ## Seguridad
 
-### Contraseñas
-- se almacenan en hash con `bcrypt`
-- nunca se devuelve `password_hash`
-
-### JWT
-- autenticación con token Bearer
-- validación mediante middleware
-
-### Estado del usuario
-- si el usuario está `INACTIVO`, no puede operar en el sistema
-
-### Control por rol
-- restricciones con middleware `requireRole(...)`
-
----
-
-## Validaciones críticas del backend
-
-### Clientes / propiedades
-- la propiedad debe pertenecer al cliente seleccionado
-
-### Programaciones
-- cliente activo
-- propiedad activa
-- propiedad pertenece al cliente
-- servicio activo
-- cuadrilla activa si aplica
-
-### Órdenes
-- cliente válido
-- propiedad válida
-- propiedad pertenece al cliente
-- cada detalle debe tener un servicio válido
-- si el detalle usa programación, debe coincidir con cliente, propiedad y servicio
-
-### Pagos
-- la orden debe pertenecer al cliente indicado
-
-### Créditos
-- no permitir sobrepago
-- recalcular saldo automáticamente
-- recalcular estado automáticamente
+| Capa | Implementación |
+|---|---|
+| Headers HTTP | `helmet()` con defaults |
+| CORS | Whitelist desde `CORS_ORIGINS` (o `*` en dev) |
+| Rate limit | Login 10/15min · API general 600/15min |
+| Auth | JWT Bearer + `bcrypt(10)` para passwords |
+| Roles | Middleware `requireRole(...)` por ruta |
+| Inputs | `validateIdParam` evita SQL errors por IDs no numéricos |
+| Password policy | mín 8 chars, al menos 1 letra y 1 número |
+| Auditoría | Toda acción mutativa registra evento (`tabla`, `id`, `accion`, `valores_anteriores`, `valores_nuevos`, `realizado_por`) |
+| Body limit | 2MB por defecto |
+| SQL | Siempre parametrizado con `$1, $2, ...` — nunca string concat |
+| Transacciones | Operaciones multi-tabla usan `pool.connect()` + `BEGIN/COMMIT/ROLLBACK` |
+| Graceful shutdown | SIGTERM/SIGINT cierran HTTP + pool en orden |
 
 ---
 
-## Flujo de operación recomendado
+## Validaciones de negocio críticas
 
-1. crear categorías
-2. crear servicios
-3. crear cliente
-4. crear propiedades del cliente
-5. crear programaciones
-6. generar orden de trabajo
-7. agregar detalles de servicios
-8. subir evidencias
-9. registrar pago o crear crédito
-10. aplicar abonos si hay crédito
-11. generar alertas
-12. consultar agenda, dashboard y resúmenes
+- **Cliente↔Propiedad**: la propiedad debe pertenecer al cliente.
+- **Programación↔Orden**: si un detalle referencia una programación, debe coincidir cliente+propiedad+servicio.
+- **Cliente inactivo**: bloquea creación de orden / pago / crédito.
+- **Crédito**: rechaza pago si está PAGADO/CANCELADO o si el monto excede el saldo. Recalcula saldo y estado en cada abono. Auditoría dual `PAGO` + `ABONO`.
+- **Orden cancelada**: requiere `motivo_cancelacion`.
+- **Auto-inactivación**: un ADMIN no puede inactivar su propio usuario.
 
 ---
 
-## Ejemplo de protección de rutas
+## Tests
 
-```js
-import { authRequired, requireRole } from "../middlewares/auth.middleware.js";
+```
+backend/
+└── tests/
+    ├── unit/                   ← validarPassword, jwt, validators, requireRole
+    │   └── (40 tests)
+    └── integration/            ← supertest contra app.js con pool mockeado
+        ├── app.test.js         ← health, 404, JSON inválido, helmet
+        ├── auth.test.js        ← login + perfil + roles + JWT
+        ├── usuarios.test.js    ← CRUD + password policy E2E
+        ├── ordenes.test.js     ← transacción completa, ROLLBACK, cambio estado
+        └── pagos.test.js       ← pagos, créditos, abonos parciales/totales
+```
 
-router.post("/", authRequired, requireRole("ADMIN", "SUPERVISOR"), crearServicio);
-router.get("/", authRequired, listarServicios);
+**130 tests · ~5s · cobertura de utilidades 100%, controllers críticos 40-83%.**
+
+---
+
+## Migraciones de BD
+
+Ver `migrations/README.md` para detalles. Resumen:
+
+```bash
+npm run db:status       # qué está aplicado
+npm run db:migrate      # aplicar pendientes
+```
+
+Cada archivo `NNNN_descripcion.sql` se ejecuta en una transacción y se registra en `schema_migrations`.
+
+**Si tu BD ya tiene el schema** (ej: viene de un backup), antes de la primera corrida marca la 0001 como aplicada para no recrear las tablas:
+
+```sql
+INSERT INTO schema_migrations (version) VALUES ('0001_initial_schema.sql');
 ```
 
 ---
 
-## Estado actual del backend
+## Próximas mejoras sugeridas
 
-Este backend ya cubre:
-
-- autenticación y roles
-- gestión de usuarios
-- catálogo de servicios
-- clientes y propiedades
-- programaciones
-- órdenes con múltiples servicios
-- evidencias
-- pagos y créditos
-- alertas
-- dashboard base
-- agenda
-- resúmenes financieros y de cliente
-
----
-
-## Mejoras futuras sugeridas
-
-- integración real con mapas
-- carga real de archivos con `multer` + storage externo
-- reportes administrativos
-- auditoría de acciones
-- cotizaciones
-- inventario operativo
-- calendario visual en frontend
-- refresh tokens
-- logs de seguridad
-
----
-
-## Recomendaciones para producción
-
-- usar variables de entorno seguras
-- no exponer `JWT_SECRET`
-- usar HTTPS
-- validar inputs en todos los endpoints
-- implementar rate limiting
-- separar entorno de desarrollo y producción
-- usar almacenamiento externo para evidencias si el proyecto crece
-
----
-
-## Autor / proyecto
-
-Backend diseñado para un sistema comercial de servicios de jardinería y mantenimiento, orientado a escalabilidad y trabajo modular.
-#   s i s t e m a - s e r v i c i o s  
- 
+- Capa de servicios/repositorios (separar SQL de controllers).
+- Validación de inputs centralizada con `zod`.
+- Refresh tokens + cookies httpOnly (en vez de localStorage).
+- OpenAPI/Swagger autogenerado.
+- Logger estructurado (`pino`) con request-id.
+- Carga real de evidencias con `multer` + storage externo (S3/R2).

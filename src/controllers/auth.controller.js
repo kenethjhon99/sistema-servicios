@@ -3,6 +3,15 @@ import { pool } from "../config/db.js";
 import { createToken } from "../utils/jwt.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 
+// Hash dummy de bcrypt con los mismos costos (BCRYPT_ROUNDS=12) que un
+// usuario real. Se usa para gastar el mismo tiempo en bcrypt.compare cuando
+// el usuario del login NO existe — así un atacante no puede enumerar usuarios
+// válidos midiendo el tiempo de respuesta.
+//
+// IMPORTANTE: si cambia BCRYPT_ROUNDS en utils/password.js, regenerar este
+// hash con: node -e "import('bcrypt').then(b => b.default.hash('x', 12).then(console.log))"
+const DUMMY_BCRYPT_HASH = "$2b$12$PT0fnocNWS9QmPk7GnexaenKUXPhn9vBV8OorEf4SFUBqWRCyGB2y";
+
 export const loginUsuario = async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -24,12 +33,18 @@ export const loginUsuario = async (req, res) => {
     const { rows } = await pool.query(query, [username.trim()]);
 
     if (rows.length === 0) {
+      // Compare contra hash dummy para gastar el mismo tiempo y no
+      // filtrar "el usuario no existe" vía timing.
+      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
       return res.status(401).json({ error: "Credenciales inválidas" });
     }
 
     const usuario = rows[0];
 
     if (usuario.estado !== "ACTIVO") {
+      // Compare aquí también — un atacante podría distinguir
+      // "existe pero inactivo" vs "no existe" si saltamos bcrypt.
+      await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
       return res.status(403).json({ error: "Usuario inactivo" });
     }
 

@@ -1,5 +1,6 @@
 import { pool } from "../config/db.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
+import { validarUrlPublica } from "../utils/url.js";
 
 const TIPOS_EVIDENCIA_VALIDOS = ["ANTES", "DESPUES", "GENERAL"];
 
@@ -14,9 +15,10 @@ export const crearEvidencia = async (req, res) => {
       tamano_archivo,
       descripcion,
       orden_visual,
-      subido_por,
       fecha_evidencia,
     } = req.body;
+    // subido_por NO se acepta del body — se toma de req.user (anti-spoofing).
+    const subido_por = req.user?.id_usuario || null;
 
     if (!id_orden_trabajo) {
       return res.status(400).json({ error: "La orden de trabajo es obligatoria" });
@@ -26,8 +28,9 @@ export const crearEvidencia = async (req, res) => {
       return res.status(400).json({ error: "Tipo de evidencia inválido" });
     }
 
-    if (!archivo_url || !archivo_url.trim()) {
-      return res.status(400).json({ error: "La URL o ruta del archivo es obligatoria" });
+    const urlCheck = validarUrlPublica(archivo_url);
+    if (!urlCheck.valid) {
+      return res.status(400).json({ error: `archivo_url: ${urlCheck.error}` });
     }
 
     if (
@@ -57,23 +60,6 @@ export const crearEvidencia = async (req, res) => {
       return res.status(404).json({ error: "La orden de trabajo no existe" });
     }
 
-    if (subido_por) {
-      const usuarioResult = await pool.query(
-        `SELECT id_usuario, estado
-         FROM usuarios
-         WHERE id_usuario = $1`,
-        [subido_por]
-      );
-
-      if (usuarioResult.rows.length === 0) {
-        return res.status(404).json({ error: "El usuario que sube la evidencia no existe" });
-      }
-
-      if (usuarioResult.rows[0].estado !== "ACTIVO") {
-        return res.status(400).json({ error: "El usuario que sube la evidencia está inactivo" });
-      }
-    }
-
     const query = `
       INSERT INTO evidencias_orden (
         id_orden_trabajo,
@@ -100,7 +86,7 @@ export const crearEvidencia = async (req, res) => {
       tamano_archivo ?? null,
       descripcion?.trim() || null,
       orden_visual ?? 1,
-      subido_por || null,
+      subido_por,
       fecha_evidencia || null,
     ];
 
@@ -113,7 +99,7 @@ export const crearEvidencia = async (req, res) => {
       accion: "CREAR",
       descripcion: `Se creó la evidencia ${evidencia.id_evidencia} para la orden ${evidencia.id_orden_trabajo}`,
       valores_nuevos: evidencia,
-      realizado_por: req.user?.id_usuario || null,
+      realizado_por: subido_por,
     });
 
     return res.status(201).json(evidencia);
@@ -154,6 +140,8 @@ export const crearMultiplesEvidencias = async (req, res) => {
     }
 
     const evidenciasInsertadas = [];
+    // subido_por NO se acepta del body — se toma de req.user (anti-spoofing).
+    const subido_por = req.user?.id_usuario || null;
 
     for (const item of evidencias) {
       const {
@@ -164,7 +152,6 @@ export const crearMultiplesEvidencias = async (req, res) => {
         tamano_archivo,
         descripcion,
         orden_visual,
-        subido_por,
         fecha_evidencia,
       } = item;
 
@@ -173,9 +160,10 @@ export const crearMultiplesEvidencias = async (req, res) => {
         return res.status(400).json({ error: "Uno de los tipos de evidencia es inválido" });
       }
 
-      if (!archivo_url || !archivo_url.trim()) {
+      const urlCheck = validarUrlPublica(archivo_url);
+      if (!urlCheck.valid) {
         await client.query("ROLLBACK");
-        return res.status(400).json({ error: "Toda evidencia debe incluir archivo_url" });
+        return res.status(400).json({ error: `archivo_url: ${urlCheck.error}` });
       }
 
       if (
@@ -194,25 +182,6 @@ export const crearMultiplesEvidencias = async (req, res) => {
       ) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "El tamaño del archivo no puede ser negativo" });
-      }
-
-      if (subido_por) {
-        const usuarioResult = await client.query(
-          `SELECT id_usuario, estado
-           FROM usuarios
-           WHERE id_usuario = $1`,
-          [subido_por]
-        );
-
-        if (usuarioResult.rows.length === 0) {
-          await client.query("ROLLBACK");
-          return res.status(404).json({ error: "Uno de los usuarios que sube evidencia no existe" });
-        }
-
-        if (usuarioResult.rows[0].estado !== "ACTIVO") {
-          await client.query("ROLLBACK");
-          return res.status(400).json({ error: "Uno de los usuarios que sube evidencia está inactivo" });
-        }
       }
 
       const insertResult = await client.query(
@@ -241,7 +210,7 @@ export const crearMultiplesEvidencias = async (req, res) => {
           tamano_archivo ?? null,
           descripcion?.trim() || null,
           orden_visual ?? 1,
-          subido_por || null,
+          subido_por,
           fecha_evidencia || null,
         ]
       );
@@ -256,7 +225,7 @@ export const crearMultiplesEvidencias = async (req, res) => {
         accion: "CREAR",
         descripcion: `Se creó la evidencia ${evidencia.id_evidencia} para la orden ${evidencia.id_orden_trabajo}`,
         valores_nuevos: evidencia,
-        realizado_por: req.user?.id_usuario || null,
+        realizado_por: subido_por,
         client,
       });
     }
@@ -346,16 +315,18 @@ export const actualizarEvidencia = async (req, res) => {
       tamano_archivo,
       descripcion,
       orden_visual,
-      subido_por,
       fecha_evidencia,
     } = req.body;
+    // subido_por NO se modifica en updates: el atributo de "quién subió"
+    // es histórico y no se altera. Se preserva el valor original.
 
     if (!tipo_evidencia || !TIPOS_EVIDENCIA_VALIDOS.includes(tipo_evidencia.toUpperCase())) {
       return res.status(400).json({ error: "Tipo de evidencia inválido" });
     }
 
-    if (!archivo_url || !archivo_url.trim()) {
-      return res.status(400).json({ error: "La URL o ruta del archivo es obligatoria" });
+    const urlCheck = validarUrlPublica(archivo_url);
+    if (!urlCheck.valid) {
+      return res.status(400).json({ error: `archivo_url: ${urlCheck.error}` });
     }
 
     if (
@@ -372,23 +343,6 @@ export const actualizarEvidencia = async (req, res) => {
       Number(tamano_archivo) < 0
     ) {
       return res.status(400).json({ error: "El tamaño del archivo no puede ser negativo" });
-    }
-
-    if (subido_por) {
-      const usuarioResult = await pool.query(
-        `SELECT id_usuario, estado
-         FROM usuarios
-         WHERE id_usuario = $1`,
-        [subido_por]
-      );
-
-      if (usuarioResult.rows.length === 0) {
-        return res.status(404).json({ error: "El usuario que sube la evidencia no existe" });
-      }
-
-      if (usuarioResult.rows[0].estado !== "ACTIVO") {
-        return res.status(400).json({ error: "El usuario que sube la evidencia está inactivo" });
-      }
     }
 
     const anteriorResult = await pool.query(
@@ -411,10 +365,9 @@ export const actualizarEvidencia = async (req, res) => {
           tamano_archivo = $5,
           descripcion = $6,
           orden_visual = $7,
-          subido_por = $8,
-          fecha_evidencia = $9,
+          fecha_evidencia = $8,
           updated_at = NOW()
-      WHERE id_evidencia = $10
+      WHERE id_evidencia = $9
       RETURNING *;
     `;
 
@@ -426,7 +379,6 @@ export const actualizarEvidencia = async (req, res) => {
       tamano_archivo ?? null,
       descripcion?.trim() || null,
       orden_visual ?? 1,
-      subido_por || null,
       fecha_evidencia || null,
       id,
     ];
@@ -491,10 +443,7 @@ export const eliminarEvidencia = async (req, res) => {
       realizado_por: req.user?.id_usuario || null,
     });
 
-    return res.json({
-      mensaje: "Evidencia desactivada correctamente",
-      evidencia,
-    });
+    return res.json(evidencia);
   } catch (error) {
     console.error("Error al eliminar evidencia:", error);
     return res.status(500).json({ error: "Error interno al eliminar evidencia" });

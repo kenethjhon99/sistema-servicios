@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import bcrypt from "bcrypt";
 
@@ -166,6 +166,46 @@ describe("POST /api/auth/login — flujo de credenciales", () => {
     expect(auditCall[0]).toMatch(/INSERT INTO auditoria_eventos/i);
     // accion = 'LOGIN' es el 3er placeholder
     expect(auditCall[1][2]).toBe("LOGIN");
+  });
+});
+
+// ─── PROTECCIÓN ANTI-TIMING-ATTACK ──────────────────────────────────────
+// Sin el dummy compare, un atacante puede enumerar usuarios válidos
+// midiendo el tiempo: respuesta inmediata = no existe, ~100ms = existe.
+describe("POST /api/auth/login — constant-time (anti timing attack)", () => {
+  let bcryptSpy;
+
+  beforeEach(() => {
+    bcryptSpy = vi.spyOn(bcrypt, "compare");
+  });
+
+  afterEach(() => {
+    bcryptSpy.mockRestore();
+  });
+
+  it("invoca bcrypt.compare incluso cuando el usuario NO existe", async () => {
+    poolMock.query.mockResolvedValueOnce({ rows: [] });
+
+    await request(app)
+      .post("/api/auth/login")
+      .send({ username: "fantasma", password: "loquesea" });
+
+    expect(bcryptSpy).toHaveBeenCalledTimes(1);
+    // El hash usado debe ser el dummy ($2b$10$...), no un null/undefined
+    const [, hashUsado] = bcryptSpy.mock.calls[0];
+    expect(typeof hashUsado).toBe("string");
+    expect(hashUsado).toMatch(/^\$2[aby]\$\d{2}\$/);
+  });
+
+  it("invoca bcrypt.compare incluso cuando el usuario está INACTIVO", async () => {
+    const usuario = await mockUsuarioRow({ estado: "INACTIVO" });
+    poolMock.query.mockResolvedValueOnce({ rows: [usuario] });
+
+    await request(app)
+      .post("/api/auth/login")
+      .send({ username: "testuser", password: "loquesea" });
+
+    expect(bcryptSpy).toHaveBeenCalledTimes(1);
   });
 });
 

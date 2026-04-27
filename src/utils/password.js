@@ -11,6 +11,15 @@
  */
 export const PASSWORD_MIN_LENGTH = 8;
 
+/**
+ * Costo de bcrypt para hashing de passwords.
+ * 12 rounds ≈ 400ms en hardware moderno — buen balance entre UX y
+ * resistencia a brute force offline si la BD se filtra.
+ * Centralizado acá para garantizar consistencia entre crear/cambiar/reset
+ * password y el dummy hash de constant-time login.
+ */
+export const BCRYPT_ROUNDS = 12;
+
 export const validarPassword = (password) => {
   if (!password || typeof password !== "string") {
     return {

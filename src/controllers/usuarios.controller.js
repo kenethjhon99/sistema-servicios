@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import { pool } from "../config/db.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
-import { validarPassword } from "../utils/password.js";
+import { BCRYPT_ROUNDS, validarPassword } from "../utils/password.js";
 
 const ROLES_VALIDOS = ["ADMIN", "SUPERVISOR", "OPERADOR", "COBRADOR"];
 const ESTADOS_VALIDOS = ["ACTIVO", "INACTIVO"];
@@ -149,7 +149,7 @@ export const crearUsuario = async (req, res) => {
       });
     }
 
-    const password_hash = await bcrypt.hash(password, 10);
+    const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
     const query = `
       INSERT INTO usuarios (
@@ -200,10 +200,7 @@ export const crearUsuario = async (req, res) => {
       realizado_por: req.user?.id_usuario || null,
     });
 
-    return res.status(201).json({
-      mensaje: "Usuario creado correctamente",
-      usuario,
-    });
+    return res.status(201).json(usuario);
   } catch (error) {
     console.error("Error al crear usuario:", error);
     return res.status(500).json({ error: "Error interno al crear usuario" });
@@ -320,10 +317,7 @@ export const actualizarUsuario = async (req, res) => {
       realizado_por: req.user?.id_usuario || null,
     });
 
-    return res.json({
-      mensaje: "Usuario actualizado correctamente",
-      usuario,
-    });
+    return res.json(usuario);
   } catch (error) {
     console.error("Error al actualizar usuario:", error);
     return res.status(500).json({ error: "Error interno al actualizar usuario" });
@@ -403,10 +397,7 @@ export const cambiarEstadoUsuario = async (req, res) => {
       realizado_por: req.user?.id_usuario || null,
     });
 
-    return res.json({
-      mensaje: "Estado de usuario actualizado correctamente",
-      usuario,
-    });
+    return res.json(usuario);
   } catch (error) {
     console.error("Error al cambiar estado del usuario:", error);
     return res.status(500).json({ error: "Error interno al cambiar estado del usuario" });
@@ -454,7 +445,7 @@ export const cambiarMiPassword = async (req, res) => {
       });
     }
 
-    const nuevoHash = await bcrypt.hash(password_nueva, 10);
+    const nuevoHash = await bcrypt.hash(password_nueva, BCRYPT_ROUNDS);
 
     await pool.query(
       `
@@ -499,7 +490,7 @@ export const resetearPasswordUsuario = async (req, res) => {
     }
 
     const usuario = userResult.rows[0];
-    const nuevoHash = await bcrypt.hash(password_nueva, 10);
+    const nuevoHash = await bcrypt.hash(password_nueva, BCRYPT_ROUNDS);
 
     await pool.query(
       `

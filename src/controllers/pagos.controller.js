@@ -589,10 +589,15 @@ export const aplicarPagoACredito = async (req, res) => {
       return res.status(400).json({ error: "El monto debe ser mayor a 0" });
     }
 
+    // FOR UPDATE bloquea la fila hasta el COMMIT. Sin esto, dos abonos
+    // concurrentes leerían el mismo saldo, ambos pasarían la validación
+    // y ambos se commitearían — doble cobro registrado, saldo decrementado
+    // una sola vez. El lock serializa abonos al mismo crédito.
     const creditoResult = await client.query(
       `SELECT *
        FROM creditos
-       WHERE id_credito = $1`,
+       WHERE id_credito = $1
+       FOR UPDATE`,
       [id_credito]
     );
 
@@ -662,7 +667,7 @@ export const aplicarPagoACredito = async (req, res) => {
       realizado_por: registradoPor,
     });
 
-    await client.query(
+    const pagoCreditoResult = await client.query(
       `
         INSERT INTO pagos_credito (
           id_pago,
@@ -670,9 +675,11 @@ export const aplicarPagoACredito = async (req, res) => {
           monto_aplicado
         )
         VALUES ($1,$2,$3)
+        RETURNING id_pago_credito
       `,
       [pago.id_pago, id_credito, montoFinal]
     );
+    const id_pago_credito = pagoCreditoResult.rows[0].id_pago_credito;
 
     const nuevoMontoPagado = Number(credito.monto_pagado) + montoFinal;
     const nuevoSaldo = Number((Number(credito.monto_total) - nuevoMontoPagado).toFixed(2));
@@ -713,6 +720,7 @@ export const aplicarPagoACredito = async (req, res) => {
     return res.status(201).json({
       pago,
       credito_actualizado: creditoActualizado,
+      id_pago_credito,
     });
   } catch (error) {
     await client.query("ROLLBACK");

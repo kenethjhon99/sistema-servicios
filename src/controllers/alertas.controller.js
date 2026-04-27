@@ -519,10 +519,7 @@ export const eliminarAlerta = async (req, res) => {
     const { rows } = await pool.query(query, [id]);
     const alerta = rows[0];
 
-    return res.json({
-      mensaje: "Alerta archivada correctamente",
-      alerta,
-    });
+    return res.json(alerta);
   } catch (error) {
     console.error("Error al eliminar alerta:", error);
     return res.status(500).json({ error: "Error interno al eliminar alerta" });

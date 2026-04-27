@@ -1,5 +1,6 @@
 import { pool } from "../config/db.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
+import { validarUrlPublica } from "../utils/url.js";
 
 const TIPOS_VISITA_VALIDOS = ["PROGRAMADA", "EXTRA", "URGENTE"];
 const ORIGENES_VALIDOS = ["MANUAL", "PROGRAMACION", "COTIZACION"];
@@ -142,6 +143,14 @@ export const crearOrdenTrabajo = async (req, res) => {
     if (costo_estimado !== undefined && costo_estimado !== null && Number(costo_estimado) < 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "El costo estimado no puede ser negativo" });
+    }
+
+    if (firma_cliente_url) {
+      const urlCheck = validarUrlPublica(firma_cliente_url);
+      if (!urlCheck.valid) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: `firma_cliente_url: ${urlCheck.error}` });
+      }
     }
 
     const clienteResult = await client.query(
@@ -677,6 +686,14 @@ export const actualizarOrdenTrabajo = async (req, res) => {
     if (costo_estimado !== undefined && costo_estimado !== null && Number(costo_estimado) < 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "El costo estimado no puede ser negativo" });
+    }
+
+    if (firma_cliente_url) {
+      const urlCheck = validarUrlPublica(firma_cliente_url);
+      if (!urlCheck.valid) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: `firma_cliente_url: ${urlCheck.error}` });
+      }
     }
 
     const clienteResult = await client.query(
