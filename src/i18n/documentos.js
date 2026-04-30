@@ -19,7 +19,7 @@
 
 const es = {
   comun: {
-    moneda: "Q",
+    moneda: "$",
     total: "Total",
     subtotal: "Subtotal",
     descuento: "Descuento",
@@ -166,11 +166,30 @@ const es = {
       CANCELADO: "Cancelado",
     },
   },
+  cotizacion: {
+    titulo: "COTIZACIÓN",
+    numero: "Cotización No.",
+    fechaCotizacion: "Fecha",
+    vigenciaHasta: "Válida hasta",
+    estado: "Estado",
+    detalle: "Detalle de servicios cotizados",
+    observaciones: "Observaciones",
+    pieValidez:
+      "Esta cotización es informativa y queda sujeta a aprobación del cliente.",
+    estados: {
+      BORRADOR: "Pendiente",
+      ENVIADA: "Enviada",
+      APROBADA: "Aprobada",
+      RECHAZADA: "Rechazada",
+      VENCIDA: "Vencida",
+      CONVERTIDA: "Convertida en orden",
+    },
+  },
 };
 
 const en = {
   comun: {
-    moneda: "Q",
+    moneda: "$",
     total: "Total",
     subtotal: "Subtotal",
     descuento: "Discount",
@@ -315,6 +334,25 @@ const en = {
       PAGADO: "Paid",
       VENCIDO: "Overdue",
       CANCELADO: "Cancelled",
+    },
+  },
+  cotizacion: {
+    titulo: "QUOTE",
+    numero: "Quote No.",
+    fechaCotizacion: "Date",
+    vigenciaHasta: "Valid until",
+    estado: "Status",
+    detalle: "Quoted services detail",
+    observaciones: "Notes",
+    pieValidez:
+      "This quote is informational and subject to customer approval.",
+    estados: {
+      BORRADOR: "Pending",
+      ENVIADA: "Sent",
+      APROBADA: "Approved",
+      RECHAZADA: "Rejected",
+      VENCIDA: "Expired",
+      CONVERTIDA: "Converted to order",
     },
   },
 };

@@ -2,14 +2,12 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const REQUIRED_VARS = [
-  "PGHOST",
-  "PGPORT",
-  "PGDATABASE",
-  "PGUSER",
-  "PGPASSWORD",
-  "JWT_SECRET",
-];
+const hasDatabaseUrl =
+  process.env.DATABASE_URL && String(process.env.DATABASE_URL).trim() !== "";
+
+const REQUIRED_VARS = hasDatabaseUrl
+  ? ["JWT_SECRET"]
+  : ["PGHOST", "PGPORT", "PGDATABASE", "PGUSER", "PGPASSWORD", "JWT_SECRET"];
 
 const missing = REQUIRED_VARS.filter((key) => {
   const value = process.env[key];
@@ -69,6 +67,7 @@ if (process.env.NODE_ENV === "production" && !process.env.CORS_ORIGINS) {
 export const env = {
   NODE_ENV: process.env.NODE_ENV || "development",
   PORT: Number(process.env.PORT || 3000),
+  DATABASE_URL: process.env.DATABASE_URL || "",
 
   PGHOST: process.env.PGHOST,
   PGPORT: Number(process.env.PGPORT),

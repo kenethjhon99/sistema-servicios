@@ -1,4 +1,8 @@
 import { pool } from "../config/db.js";
+import { hasPublicColumn } from "../utils/schema.js";
+
+const resolveClienteDocumentColumn = async () =>
+  (await hasPublicColumn("clientes", "id_documento")) ? "id_documento" : "dpi";
 
 export const obtenerResumenFinancieroOrden = async (req, res) => {
   try {
@@ -141,9 +145,10 @@ export const obtenerResumenFinancieroOrden = async (req, res) => {
 export const obtenerPerfilCompletoCliente = async (req, res) => {
   try {
     const { id_cliente } = req.params;
+    const documentColumn = await resolveClienteDocumentColumn();
 
     const clienteQuery = `
-      SELECT *
+      SELECT *, ${documentColumn} AS id_documento
       FROM clientes
       WHERE id_cliente = $1
     `;
@@ -264,7 +269,11 @@ export const obtenerPerfilCompletoCliente = async (req, res) => {
     const resumenFinancieroResult = await pool.query(resumenFinancieroQuery, [id_cliente]);
 
     return res.json({
-      cliente: clienteResult.rows[0],
+      cliente: {
+        ...clienteResult.rows[0],
+        id_documento:
+          clienteResult.rows[0].id_documento ?? clienteResult.rows[0].dpi ?? null,
+      },
       propiedades: propiedadesResult.rows,
       programaciones: programacionesResult.rows,
       ordenes: ordenesResult.rows,

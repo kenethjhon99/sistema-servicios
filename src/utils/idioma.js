@@ -11,7 +11,7 @@
  * confundir templates futuros.
  */
 export const SUPPORTED_LANGS = ["es", "en"];
-export const DEFAULT_LANG = "es";
+export const DEFAULT_LANG = "en";
 
 export const resolverIdioma = ({ queryLang, clienteLang } = {}) => {
   if (queryLang && SUPPORTED_LANGS.includes(queryLang)) {

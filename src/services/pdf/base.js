@@ -141,7 +141,7 @@ export const drawCaja = (doc, titulo, campos) => {
  * Dibuja la línea final del total (con label a la izquierda y monto a la
  * derecha en negrita, color acento).
  */
-export const drawTotalLinea = (doc, etiqueta, monto, moneda = "Q") => {
+export const drawTotalLinea = (doc, etiqueta, monto, moneda = "$") => {
   const y = doc.y;
   doc
     .strokeColor(COLORS.borde)
@@ -304,7 +304,7 @@ export const formatearFecha = (fecha, lang = "es") => {
 /**
  * Formatea un monto numérico a "Q123.45".
  */
-export const formatearMonto = (monto, moneda = "Q") => {
+export const formatearMonto = (monto, moneda = "$") => {
   const n = Number(monto || 0);
   return `${moneda}${n.toFixed(2)}`;
 };

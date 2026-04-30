@@ -14,11 +14,13 @@
  */
 import { pool } from "../config/db.js";
 import { resolverIdioma } from "../utils/idioma.js";
+import { hasPublicColumn } from "../utils/schema.js";
 import { generarReciboPagoPDF } from "../services/pdf/reciboPago.js";
 import { generarTicketServicioPDF } from "../services/pdf/ticketServicio.js";
 import { generarInformeOrdenPDF } from "../services/pdf/informeOrden.js";
 import { generarEstadoCuentaPDF } from "../services/pdf/estadoCuenta.js";
 import { generarReciboAbonoPDF } from "../services/pdf/reciboAbono.js";
+import { generarCotizacionPDF } from "../services/pdf/cotizacion.js";
 
 /**
  * Helper: setea los headers HTTP de PDF inline con un filename dado.
@@ -39,6 +41,11 @@ const responderError = (res, mensaje) => {
   res.end();
 };
 
+const getClienteIdiomaSelect = async (alias = "c") =>
+  (await hasPublicColumn("clientes", "idioma_preferido"))
+    ? `${alias}.idioma_preferido AS idioma_preferido`
+    : `'es'::character varying AS idioma_preferido`;
+
 // ============================================================================
 // GET /api/documentos/recibo-pago/:id_pago
 // ============================================================================
@@ -46,6 +53,7 @@ export const documentoReciboPago = async (req, res) => {
   try {
     const { id_pago } = req.params;
     const queryLang = req.query.lang;
+    const idiomaSelect = await getClienteIdiomaSelect("c");
 
     const { rows } = await pool.query(
       `
@@ -60,7 +68,7 @@ export const documentoReciboPago = async (req, res) => {
           c.correo,
           c.direccion_principal,
           c.nit,
-          c.idioma_preferido,
+          ${idiomaSelect},
           u.nombre AS registrado_por_nombre
         FROM pagos p
         INNER JOIN clientes c ON p.id_cliente = c.id_cliente
@@ -503,5 +511,93 @@ export const documentoReciboAbono = async (req, res) => {
   } catch (error) {
     console.error("Error al generar recibo de abono:", error);
     responderError(res, "Error interno al generar recibo de abono");
+  }
+};
+
+// ============================================================================
+// GET /api/documentos/cotizacion/:id_cotizacion
+// ============================================================================
+export const documentoCotizacion = async (req, res) => {
+  try {
+    const { id_cotizacion } = req.params;
+    const queryLang = req.query.lang;
+    const formato = req.query.formato === "ticket" ? "ticket" : "full";
+    const idiomaSelect = await getClienteIdiomaSelect("c");
+
+    const cotResult = await pool.query(
+      `
+        SELECT
+          co.*,
+          c.id_cliente,
+          c.nombre_completo,
+          c.nombre_empresa,
+          c.telefono,
+          c.nit,
+          ${idiomaSelect},
+          p.nombre_propiedad,
+          p.direccion AS propiedad_direccion
+        FROM cotizaciones co
+        INNER JOIN clientes c ON co.id_cliente = c.id_cliente
+        LEFT JOIN propiedades p ON co.id_propiedad = p.id_propiedad
+        WHERE co.id_cotizacion = $1
+      `,
+      [id_cotizacion]
+    );
+
+    if (cotResult.rows.length === 0) {
+      return res.status(404).json({ error: "Cotización no encontrada" });
+    }
+
+    const detallesResult = await pool.query(
+      `
+        SELECT cd.*, s.nombre AS servicio
+        FROM cotizaciones_detalle cd
+        LEFT JOIN servicios s ON cd.id_servicio = s.id_servicio
+        WHERE cd.id_cotizacion = $1
+        ORDER BY cd.id_cotizacion_detalle
+      `,
+      [id_cotizacion]
+    );
+
+    const row = cotResult.rows[0];
+    const cliente = {
+      nombre_completo: row.nombre_completo,
+      nombre_empresa: row.nombre_empresa,
+      telefono: row.telefono,
+      nit: row.nit,
+      idioma_preferido: row.idioma_preferido,
+    };
+    const propiedad = row.nombre_propiedad
+      ? {
+          nombre_propiedad: row.nombre_propiedad,
+          direccion: row.propiedad_direccion,
+        }
+      : null;
+    const cotizacion = { ...row };
+
+    const lang = resolverIdioma({
+      queryLang,
+      clienteLang: cliente.idioma_preferido,
+    });
+
+    setHeadersPDF(
+      res,
+      formato === "ticket"
+        ? `cotizacion-ticket-${cotizacion.numero_cotizacion}-${lang}.pdf`
+        : `cotizacion-${cotizacion.numero_cotizacion}-${lang}.pdf`
+    );
+
+    await generarCotizacionPDF({
+      cotizacion,
+      cliente,
+      propiedad,
+      detalles: detallesResult.rows,
+      lang,
+      formato,
+      output: res,
+    });
+  } catch (error) {
+    console.error("Error al generar PDF de cotización:", error);
+    responderError(res, "Error interno al generar cotización");
   }
 };

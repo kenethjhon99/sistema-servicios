@@ -5,6 +5,7 @@ import {
   documentoInformeOrden,
   documentoEstadoCuenta,
   documentoReciboAbono,
+  documentoCotizacion,
 } from "../controllers/documentos.controller.js";
 import { authRequired } from "../middlewares/auth.middleware.js";
 import { validateIdParam } from "../middlewares/validators.middleware.js";
@@ -49,6 +50,14 @@ router.get(
   authRequired,
   validateIdParam("id_pago_credito"),
   documentoReciboAbono
+);
+
+// Cotización (estimado)
+router.get(
+  "/cotizacion/:id_cotizacion",
+  authRequired,
+  validateIdParam("id_cotizacion"),
+  documentoCotizacion
 );
 
 export default router;

@@ -1,6 +1,7 @@
 import { pool } from "../config/db.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 import { validarUrlPublica } from "../utils/url.js";
+import { hasPublicColumn } from "../utils/schema.js";
 
 const TIPOS_VISITA_VALIDOS = ["PROGRAMADA", "EXTRA", "URGENTE"];
 const ORIGENES_VALIDOS = ["MANUAL", "PROGRAMACION", "COTIZACION"];
@@ -18,6 +19,136 @@ const ESTADOS_DETALLE_VALIDOS = [
   "COMPLETADO",
   "CANCELADO",
 ];
+
+const getOrdenSchemaSupport = async () => {
+  const [
+    soportaUpdatedByOrden,
+    soportaCanceladoPorOrden,
+    soportaCanceladoEnOrden,
+    soportaDetalleRequiereMateriales,
+    soportaDetalleTipoMaterial,
+    soportaDetallePrecioMaterialExtra,
+  ] = await Promise.all([
+    hasPublicColumn("ordenes_trabajo", "updated_by"),
+    hasPublicColumn("ordenes_trabajo", "cancelado_por"),
+    hasPublicColumn("ordenes_trabajo", "cancelado_en"),
+    hasPublicColumn("ordenes_trabajo_detalle", "requiere_materiales"),
+    hasPublicColumn("ordenes_trabajo_detalle", "tipo_material"),
+    hasPublicColumn("ordenes_trabajo_detalle", "precio_material_extra"),
+  ]);
+
+  return {
+    soportaUpdatedByOrden,
+    soportaCanceladoPorOrden,
+    soportaCanceladoEnOrden,
+    soportaDetalleRequiereMateriales,
+    soportaDetalleTipoMaterial,
+    soportaDetallePrecioMaterialExtra,
+  };
+};
+
+const normalizarIdsEmpleados = (id_empleados = []) => {
+  if (id_empleados === undefined || id_empleados === null) {
+    return [];
+  }
+
+  if (!Array.isArray(id_empleados)) {
+    return null;
+  }
+
+  const ids = [...new Set(id_empleados.map((id) => Number(id)).filter(Boolean))];
+  return ids.every((id) => Number.isInteger(id) && id > 0) ? ids : null;
+};
+
+const validarEmpleadosOrden = async (client, idsEmpleados, id_cuadrilla) => {
+  for (const id_empleado of idsEmpleados) {
+    const empleadoResult = await client.query(
+      `SELECT id_empleado, id_cuadrilla, estado FROM empleados WHERE id_empleado = $1`,
+      [id_empleado]
+    );
+
+    if (empleadoResult.rows.length === 0) {
+      return { ok: false, status: 404, error: `El tecnico ${id_empleado} no existe` };
+    }
+
+    const empleado = empleadoResult.rows[0];
+
+    if (empleado.estado !== "ACTIVO") {
+      return { ok: false, status: 400, error: `El tecnico ${id_empleado} esta inactivo` };
+    }
+
+    if (
+      id_cuadrilla &&
+      empleado.id_cuadrilla &&
+      Number(empleado.id_cuadrilla) !== Number(id_cuadrilla)
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        error: `El tecnico ${id_empleado} no pertenece a la cuadrilla seleccionada`,
+      };
+    }
+  }
+
+  return { ok: true };
+};
+
+const sincronizarEmpleadosOrden = async (
+  client,
+  id_orden_trabajo,
+  idsEmpleados,
+  { clearExisting = false } = {}
+) => {
+  if (!clearExisting && idsEmpleados.length === 0) {
+    return;
+  }
+
+  await client.query(`DELETE FROM ordenes_empleados WHERE id_orden_trabajo = $1`, [id_orden_trabajo]);
+
+  for (const id_empleado of idsEmpleados) {
+    await client.query(
+      `
+        INSERT INTO ordenes_empleados (id_orden_trabajo, id_empleado)
+        VALUES ($1, $2)
+      `,
+      [id_orden_trabajo, id_empleado]
+    );
+  }
+};
+
+const validarDisponibilidadEmpleadosOrden = async (
+  client,
+  idsEmpleados,
+  fecha_servicio,
+  excludeOrdenId = null
+) => {
+  for (const id_empleado of idsEmpleados) {
+    const conflictoResult = await client.query(
+      `
+        SELECT ot.id_orden_trabajo, ot.numero_orden
+        FROM ordenes_empleados oe
+        INNER JOIN ordenes_trabajo ot
+          ON oe.id_orden_trabajo = ot.id_orden_trabajo
+        WHERE oe.id_empleado = $1
+          AND ot.fecha_servicio = $2
+          AND ot.estado <> 'CANCELADA'
+          AND ($3::bigint IS NULL OR ot.id_orden_trabajo <> $3)
+        LIMIT 1
+      `,
+      [id_empleado, fecha_servicio, excludeOrdenId]
+    );
+
+    if (conflictoResult.rows.length > 0) {
+      return {
+        ok: false,
+        status: 409,
+        error: `El tecnico ${id_empleado} ya tiene asignada la orden ${conflictoResult.rows[0].numero_orden} para la fecha ${fecha_servicio}`,
+      };
+    }
+  }
+
+  return { ok: true };
+};
 
 const generarNumeroOrden = () => {
   const now = new Date();
@@ -75,11 +206,13 @@ export const crearOrdenTrabajo = async (req, res) => {
 
   try {
     await client.query("BEGIN");
+    const schema = await getOrdenSchemaSupport();
 
     const {
       id_cliente,
       id_propiedad,
       id_cuadrilla,
+      id_empleados,
       fecha_servicio,
       tipo_visita,
       origen,
@@ -115,6 +248,12 @@ export const crearOrdenTrabajo = async (req, res) => {
     if (!Array.isArray(detalles) || detalles.length === 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "Debe enviar al menos un detalle de servicio" });
+    }
+
+    const idsEmpleados = normalizarIdsEmpleados(id_empleados);
+    if (idsEmpleados === null) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "id_empleados debe ser un arreglo de IDs validos" });
     }
 
     const tipoVisitaFinal = (tipo_visita || "PROGRAMADA").toUpperCase();
@@ -205,6 +344,22 @@ export const crearOrdenTrabajo = async (req, res) => {
       }
     }
 
+    const empleadosValidacion = await validarEmpleadosOrden(client, idsEmpleados, id_cuadrilla);
+    if (!empleadosValidacion.ok) {
+      await client.query("ROLLBACK");
+      return res.status(empleadosValidacion.status).json({ error: empleadosValidacion.error });
+    }
+
+    const disponibilidadEmpleados = await validarDisponibilidadEmpleadosOrden(
+      client,
+      idsEmpleados,
+      fecha_servicio
+    );
+    if (!disponibilidadEmpleados.ok) {
+      await client.query("ROLLBACK");
+      return res.status(disponibilidadEmpleados.status).json({ error: disponibilidadEmpleados.error });
+    }
+
     const numero_orden = generarNumeroOrden();
 
     const ordenResult = await client.query(
@@ -268,6 +423,9 @@ export const crearOrdenTrabajo = async (req, res) => {
         cantidad,
         precio_unitario,
         descripcion_precio,
+        requiere_materiales,
+        tipo_material,
+        precio_material_extra,
         duracion_estimada_min,
         duracion_real_min,
         estado,
@@ -289,6 +447,20 @@ export const crearOrdenTrabajo = async (req, res) => {
       if (precioUnitarioFinal < 0) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "El precio unitario no puede ser negativo" });
+      }
+
+      const requiereMaterialesFinal = Boolean(requiere_materiales);
+      const precioMaterialExtraFinal =
+        precio_material_extra === undefined || precio_material_extra === null || precio_material_extra === ""
+          ? 0
+          : Number(precio_material_extra);
+      if (precioMaterialExtraFinal < 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "El precio extra de materiales no puede ser negativo" });
+      }
+      if (requiereMaterialesFinal && !tipo_material?.trim()) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Debes indicar el tipo de material cuando aplica material extra" });
       }
 
       if (
@@ -369,42 +541,63 @@ export const crearOrdenTrabajo = async (req, res) => {
         }
       }
 
-      const subtotal = Number((cantidadFinal * precioUnitarioFinal).toFixed(2));
+      const subtotal = Number((cantidadFinal * precioUnitarioFinal + precioMaterialExtraFinal).toFixed(2));
 
+      const detailColumns = [
+        "id_orden_trabajo",
+        "id_servicio",
+        "id_programacion",
+        "descripcion_servicio",
+        "cantidad",
+        "precio_unitario",
+        "descripcion_precio",
+        "subtotal",
+        "duracion_estimada_min",
+        "duracion_real_min",
+        "estado",
+        "observaciones",
+      ];
+      const detailValues = [
+        orden.id_orden_trabajo,
+        id_servicio,
+        id_programacion || null,
+        descripcion_servicio?.trim() || null,
+        cantidadFinal,
+        precioUnitarioFinal,
+        descripcion_precio?.trim() || null,
+        subtotal,
+        duracion_estimada_min ?? null,
+        duracion_real_min ?? null,
+        estadoDetalleFinal,
+        observaciones?.trim() || null,
+      ];
+
+      if (schema.soportaDetalleRequiereMateriales) {
+        detailColumns.push("requiere_materiales");
+        detailValues.push(requiereMaterialesFinal);
+      }
+      if (schema.soportaDetalleTipoMaterial) {
+        detailColumns.push("tipo_material");
+        detailValues.push(requiereMaterialesFinal ? tipo_material.trim() : null);
+      }
+      if (schema.soportaDetallePrecioMaterialExtra) {
+        detailColumns.push("precio_material_extra");
+        detailValues.push(precioMaterialExtraFinal);
+      }
+
+      const detailPlaceholders = detailValues.map((_, idx) => `$${idx + 1}`).join(",");
       await client.query(
         `
           INSERT INTO ordenes_trabajo_detalle (
-            id_orden_trabajo,
-            id_servicio,
-            id_programacion,
-            descripcion_servicio,
-            cantidad,
-            precio_unitario,
-            descripcion_precio,
-            subtotal,
-            duracion_estimada_min,
-            duracion_real_min,
-            estado,
-            observaciones
+            ${detailColumns.join(", ")}
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          VALUES (${detailPlaceholders})
         `,
-        [
-          orden.id_orden_trabajo,
-          id_servicio,
-          id_programacion || null,
-          descripcion_servicio?.trim() || null,
-          cantidadFinal,
-          precioUnitarioFinal,
-          descripcion_precio?.trim() || null,
-          subtotal,
-          duracion_estimada_min ?? null,
-          duracion_real_min ?? null,
-          estadoDetalleFinal,
-          observaciones?.trim() || null,
-        ]
+        detailValues
       );
     }
+
+    await sincronizarEmpleadosOrden(client, orden.id_orden_trabajo, idsEmpleados);
 
     const ordenFinal = await recalcularTotalesOrden(client, orden.id_orden_trabajo, descuentoFinal);
 
@@ -503,6 +696,14 @@ export const listarOrdenesTrabajo = async (req, res) => {
         INNER JOIN clientes c ON ot.id_cliente = c.id_cliente
         INNER JOIN propiedades p ON ot.id_propiedad = p.id_propiedad
         LEFT JOIN cuadrillas cu ON ot.id_cuadrilla = cu.id_cuadrilla
+        LEFT JOIN (
+          SELECT
+            oe.id_orden_trabajo,
+            STRING_AGG(e.nombre_completo, ', ' ORDER BY e.nombre_completo) AS tecnicos
+          FROM ordenes_empleados oe
+          INNER JOIN empleados e ON oe.id_empleado = e.id_empleado
+          GROUP BY oe.id_orden_trabajo
+        ) te ON te.id_orden_trabajo = ot.id_orden_trabajo
         ${whereClause}
       `,
       values
@@ -514,7 +715,8 @@ export const listarOrdenesTrabajo = async (req, res) => {
         ot.*,
         c.nombre_completo AS cliente,
         p.nombre_propiedad,
-        cu.nombre AS cuadrilla
+        cu.nombre AS cuadrilla,
+        te.tecnicos
       FROM ordenes_trabajo ot
       INNER JOIN clientes c
         ON ot.id_cliente = c.id_cliente
@@ -522,6 +724,15 @@ export const listarOrdenesTrabajo = async (req, res) => {
         ON ot.id_propiedad = p.id_propiedad
       LEFT JOIN cuadrillas cu
         ON ot.id_cuadrilla = cu.id_cuadrilla
+      LEFT JOIN (
+        SELECT
+          oe.id_orden_trabajo,
+          STRING_AGG(e.nombre_completo, ', ' ORDER BY e.nombre_completo) AS tecnicos
+        FROM ordenes_empleados oe
+        INNER JOIN empleados e ON oe.id_empleado = e.id_empleado
+        GROUP BY oe.id_orden_trabajo
+      ) te
+        ON te.id_orden_trabajo = ot.id_orden_trabajo
       ${whereClause}
       ORDER BY ot.fecha_servicio DESC, ot.id_orden_trabajo DESC
       LIMIT $${index} OFFSET $${index + 1}
@@ -551,7 +762,8 @@ export const obtenerOrdenTrabajoPorId = async (req, res) => {
         p.nombre_propiedad,
         p.direccion,
         p.referencia,
-        cu.nombre AS cuadrilla
+        cu.nombre AS cuadrilla,
+        te.tecnicos
       FROM ordenes_trabajo ot
       INNER JOIN clientes c
         ON ot.id_cliente = c.id_cliente
@@ -559,6 +771,15 @@ export const obtenerOrdenTrabajoPorId = async (req, res) => {
         ON ot.id_propiedad = p.id_propiedad
       LEFT JOIN cuadrillas cu
         ON ot.id_cuadrilla = cu.id_cuadrilla
+      LEFT JOIN (
+        SELECT
+          oe.id_orden_trabajo,
+          STRING_AGG(e.nombre_completo, ', ' ORDER BY e.nombre_completo) AS tecnicos
+        FROM ordenes_empleados oe
+        INNER JOIN empleados e ON oe.id_empleado = e.id_empleado
+        GROUP BY oe.id_orden_trabajo
+      ) te
+        ON te.id_orden_trabajo = ot.id_orden_trabajo
       WHERE ot.id_orden_trabajo = $1;
     `;
 
@@ -584,9 +805,26 @@ export const obtenerOrdenTrabajoPorId = async (req, res) => {
 
     const detallesResult = await pool.query(detallesQuery, [id]);
 
+    const empleadosAsignadosResult = await pool.query(
+      `
+        SELECT
+          e.id_empleado,
+          e.nombre_completo,
+          e.puesto,
+          e.especialidad
+        FROM ordenes_empleados oe
+        INNER JOIN empleados e
+          ON oe.id_empleado = e.id_empleado
+        WHERE oe.id_orden_trabajo = $1
+        ORDER BY e.nombre_completo ASC
+      `,
+      [id]
+    );
+
     return res.json({
       ...ordenResult.rows[0],
       detalles: detallesResult.rows,
+      empleados_asignados: empleadosAsignadosResult.rows,
     });
   } catch (error) {
     console.error("Error al obtener orden:", error);
@@ -599,12 +837,14 @@ export const actualizarOrdenTrabajo = async (req, res) => {
 
   try {
     await client.query("BEGIN");
+    const schema = await getOrdenSchemaSupport();
 
     const { id } = req.params;
     const {
       id_cliente,
       id_propiedad,
       id_cuadrilla,
+      id_empleados,
       fecha_servicio,
       tipo_visita,
       origen,
@@ -640,6 +880,12 @@ export const actualizarOrdenTrabajo = async (req, res) => {
     if (!Array.isArray(detalles) || detalles.length === 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "Debe enviar al menos un detalle de servicio" });
+    }
+
+    const idsEmpleados = normalizarIdsEmpleados(id_empleados);
+    if (idsEmpleados === null) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "id_empleados debe ser un arreglo de IDs validos" });
     }
 
     const anteriorOrdenResult = await client.query(
@@ -748,6 +994,23 @@ export const actualizarOrdenTrabajo = async (req, res) => {
       }
     }
 
+    const empleadosValidacion = await validarEmpleadosOrden(client, idsEmpleados, id_cuadrilla);
+    if (!empleadosValidacion.ok) {
+      await client.query("ROLLBACK");
+      return res.status(empleadosValidacion.status).json({ error: empleadosValidacion.error });
+    }
+
+    const disponibilidadEmpleados = await validarDisponibilidadEmpleadosOrden(
+      client,
+      idsEmpleados,
+      fecha_servicio,
+      Number(id)
+    );
+    if (!disponibilidadEmpleados.ok) {
+      await client.query("ROLLBACK");
+      return res.status(disponibilidadEmpleados.status).json({ error: disponibilidadEmpleados.error });
+    }
+
     await client.query(
       `
         UPDATE ordenes_trabajo
@@ -825,6 +1088,9 @@ export const actualizarOrdenTrabajo = async (req, res) => {
         cantidad,
         precio_unitario,
         descripcion_precio,
+        requiere_materiales,
+        tipo_material,
+        precio_material_extra,
         duracion_estimada_min,
         duracion_real_min,
         estado,
@@ -846,6 +1112,20 @@ export const actualizarOrdenTrabajo = async (req, res) => {
       if (precioUnitarioFinal < 0) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "El precio unitario no puede ser negativo" });
+      }
+
+      const requiereMaterialesFinal = Boolean(requiere_materiales);
+      const precioMaterialExtraFinal =
+        precio_material_extra === undefined || precio_material_extra === null || precio_material_extra === ""
+          ? 0
+          : Number(precio_material_extra);
+      if (precioMaterialExtraFinal < 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "El precio extra de materiales no puede ser negativo" });
+      }
+      if (requiereMaterialesFinal && !tipo_material?.trim()) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Debes indicar el tipo de material cuando aplica material extra" });
       }
 
       const estadoDetalleFinal = (estado || "PENDIENTE").toUpperCase();
@@ -908,42 +1188,63 @@ export const actualizarOrdenTrabajo = async (req, res) => {
         }
       }
 
-      const subtotal = Number((cantidadFinal * precioUnitarioFinal).toFixed(2));
+      const subtotal = Number((cantidadFinal * precioUnitarioFinal + precioMaterialExtraFinal).toFixed(2));
 
+      const detailColumns = [
+        "id_orden_trabajo",
+        "id_servicio",
+        "id_programacion",
+        "descripcion_servicio",
+        "cantidad",
+        "precio_unitario",
+        "descripcion_precio",
+        "subtotal",
+        "duracion_estimada_min",
+        "duracion_real_min",
+        "estado",
+        "observaciones",
+      ];
+      const detailValues = [
+        id,
+        id_servicio,
+        id_programacion || null,
+        descripcion_servicio?.trim() || null,
+        cantidadFinal,
+        precioUnitarioFinal,
+        descripcion_precio?.trim() || null,
+        subtotal,
+        duracion_estimada_min ?? null,
+        duracion_real_min ?? null,
+        estadoDetalleFinal,
+        observaciones?.trim() || null,
+      ];
+
+      if (schema.soportaDetalleRequiereMateriales) {
+        detailColumns.push("requiere_materiales");
+        detailValues.push(requiereMaterialesFinal);
+      }
+      if (schema.soportaDetalleTipoMaterial) {
+        detailColumns.push("tipo_material");
+        detailValues.push(requiereMaterialesFinal ? tipo_material.trim() : null);
+      }
+      if (schema.soportaDetallePrecioMaterialExtra) {
+        detailColumns.push("precio_material_extra");
+        detailValues.push(precioMaterialExtraFinal);
+      }
+
+      const detailPlaceholders = detailValues.map((_, idx) => `$${idx + 1}`).join(",");
       await client.query(
         `
           INSERT INTO ordenes_trabajo_detalle (
-            id_orden_trabajo,
-            id_servicio,
-            id_programacion,
-            descripcion_servicio,
-            cantidad,
-            precio_unitario,
-            descripcion_precio,
-            subtotal,
-            duracion_estimada_min,
-            duracion_real_min,
-            estado,
-            observaciones
+            ${detailColumns.join(", ")}
           )
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          VALUES (${detailPlaceholders})
         `,
-        [
-          id,
-          id_servicio,
-          id_programacion || null,
-          descripcion_servicio?.trim() || null,
-          cantidadFinal,
-          precioUnitarioFinal,
-          descripcion_precio?.trim() || null,
-          subtotal,
-          duracion_estimada_min ?? null,
-          duracion_real_min ?? null,
-          estadoDetalleFinal,
-          observaciones?.trim() || null,
-        ]
+        detailValues
       );
     }
+
+    await sincronizarEmpleadosOrden(client, Number(id), idsEmpleados, { clearExisting: true });
 
     // Recalcular totales excluyendo los detalles CANCELADOS
     const subtotalResult = await client.query(
@@ -999,6 +1300,7 @@ export const cambiarEstadoOrdenTrabajo = async (req, res) => {
 
   try {
     await client.query("BEGIN");
+    const schema = await getOrdenSchemaSupport();
 
     const { id } = req.params;
     const { estado, motivo_cancelacion } = req.body;
@@ -1028,24 +1330,35 @@ export const cambiarEstadoOrdenTrabajo = async (req, res) => {
     const anterior = anteriorResult.rows[0];
     const esCancelacion = estado.toUpperCase() === "CANCELADA";
 
-    const query = `
-      UPDATE ordenes_trabajo
-      SET estado = $1,
-          motivo_cancelacion = $2,
-          updated_by = $3,
-          updated_at = NOW(),
-          cancelado_por = CASE WHEN $1 = 'CANCELADA' THEN $3 ELSE cancelado_por END,
-          cancelado_en = CASE WHEN $1 = 'CANCELADA' THEN NOW() ELSE cancelado_en END
-      WHERE id_orden_trabajo = $4
-      RETURNING *;
-    `;
+    const sets = ["estado = $1", "motivo_cancelacion = $2", "updated_at = NOW()"];
+    const values = [estado.toUpperCase(), motivo_cancelacion?.trim() || null];
+    const userId = req.user?.id_usuario || null;
 
-    const { rows } = await client.query(query, [
-      estado.toUpperCase(),
-      motivo_cancelacion?.trim() || null,
-      req.user?.id_usuario || null,
-      id,
-    ]);
+    if (schema.soportaUpdatedByOrden) {
+      values.push(userId);
+      sets.push(`updated_by = $${values.length}`);
+    }
+
+    if (schema.soportaCanceladoPorOrden) {
+      values.push(userId);
+      sets.push(`cancelado_por = CASE WHEN $1 = 'CANCELADA' THEN $${values.length} ELSE cancelado_por END`);
+    }
+
+    if (schema.soportaCanceladoEnOrden) {
+      sets.push(`cancelado_en = CASE WHEN $1 = 'CANCELADA' THEN NOW() ELSE cancelado_en END`);
+    }
+
+    values.push(id);
+
+    const { rows } = await client.query(
+      `
+        UPDATE ordenes_trabajo
+        SET ${sets.join(", ")}
+        WHERE id_orden_trabajo = $${values.length}
+        RETURNING *;
+      `,
+      values
+    );
 
     const orden = rows[0];
 
@@ -1059,7 +1372,7 @@ export const cambiarEstadoOrdenTrabajo = async (req, res) => {
         : `Se cambió el estado de la orden ${orden.numero_orden} a ${orden.estado}`,
       valores_anteriores: anterior,
       valores_nuevos: orden,
-      realizado_por: req.user?.id_usuario || null,
+      realizado_por: userId,
     });
 
     await client.query("COMMIT");

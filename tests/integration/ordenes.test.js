@@ -312,6 +312,83 @@ describe("POST /api/ordenes — integridad referencial y negocio", () => {
     expect(subtotalArg).toBe(200);
   });
 
+  it("crea orden con tecnicos asignados", async () => {
+    const auth = primeAuth(poolMock, supervisor());
+    const ordenInsertada = {
+      id_orden_trabajo: 101,
+      numero_orden: "OT-20260424-120100",
+      id_cliente: 1,
+      id_propiedad: 2,
+    };
+    const ordenFinal = {
+      ...ordenInsertada,
+      subtotal: 200,
+      total_orden: 200,
+      descuento: 0,
+    };
+
+    seedClientResponses([
+      { rows: [{ id_cliente: 1, estado: "ACTIVO" }] },
+      { rows: [{ id_propiedad: 2, id_cliente: 1, estado: "ACTIVA" }] },
+      { rows: [{ id_cuadrilla: 12, estado: "ACTIVA" }] },
+      { rows: [{ id_empleado: 20, id_cuadrilla: 12, estado: "ACTIVO" }] },
+      { rows: [] },
+      { rows: [ordenInsertada] },
+      { rows: [{ id_servicio: 7, estado: "ACTIVO" }] },
+      { rows: [] },
+      { rows: [] },
+      { rows: [] },
+      { rows: [{ subtotal: 200 }] },
+      { rows: [ordenFinal] },
+      { rows: [] },
+    ]);
+
+    const res = await request(app)
+      .post("/api/ordenes")
+      .set("Authorization", auth)
+      .send({
+        id_cliente: 1,
+        id_propiedad: 2,
+        id_cuadrilla: 12,
+        id_empleados: [20],
+        fecha_servicio: "2026-04-25",
+        detalles: [{ id_servicio: 7, cantidad: 2, precio_unitario: 100 }],
+      });
+
+    expect(res.status).toBe(201);
+
+    const insertTecnicoCall = clientMock.query.mock.calls.find((c) =>
+      /INSERT INTO ordenes_empleados/i.test(String(c[0]))
+    );
+    expect(insertTecnicoCall[1]).toEqual([101, 20]);
+  });
+
+  it("rechaza tecnico sobreasignado para la misma fecha", async () => {
+    const auth = primeAuth(poolMock, supervisor());
+    seedClientResponses([
+      { rows: [{ id_cliente: 1, estado: "ACTIVO" }] },
+      { rows: [{ id_propiedad: 2, id_cliente: 1, estado: "ACTIVA" }] },
+      { rows: [{ id_cuadrilla: 12, estado: "ACTIVA" }] },
+      { rows: [{ id_empleado: 20, id_cuadrilla: 12, estado: "ACTIVO" }] },
+      { rows: [{ id_orden_trabajo: 88, numero_orden: "OT-EXISTENTE" }] },
+    ]);
+
+    const res = await request(app)
+      .post("/api/ordenes")
+      .set("Authorization", auth)
+      .send({
+        id_cliente: 1,
+        id_propiedad: 2,
+        id_cuadrilla: 12,
+        id_empleados: [20],
+        fecha_servicio: "2026-04-25",
+        detalles: [{ id_servicio: 7, cantidad: 2, precio_unitario: 100 }],
+      });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/OT-EXISTENTE/);
+  });
+
   it("ROLLBACK si un detalle tiene cantidad <= 0", async () => {
     const auth = primeAuth(poolMock, supervisor());
     seedClientResponses([
