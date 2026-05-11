@@ -1,5 +1,6 @@
 import { pool } from "../config/db.js";
 import { apiErrorText } from "../i18n/apiMessages.js";
+import { hasPublicColumn } from "../utils/schema.js";
 
 const formatearFechaISO = (fecha) => {
   if (!fecha) return null;
@@ -20,9 +21,23 @@ export const obtenerAgendaDia = async (req, res) => {
       );
     }
 
-    const programacionesQuery = `
+    const soportaEjecucionesProgramacion = await hasPublicColumn(
+      "programaciones_ejecuciones",
+      "id_ejecucion"
+    );
+    const soportaEmpleadoResponsable = await hasPublicColumn(
+      "programaciones_servicio",
+      "id_empleado_responsable"
+    );
+
+    const programacionesBaseSelect = `
       SELECT
         ps.id_programacion,
+        ${
+          soportaEmpleadoResponsable
+            ? "ps.id_empleado_responsable,"
+            : "NULL::bigint AS id_empleado_responsable,"
+        }
         ps.frecuencia,
         ps.hora_programada,
         ps.proxima_fecha,
@@ -38,16 +53,77 @@ export const obtenerAgendaDia = async (req, res) => {
         s.id_servicio,
         s.nombre AS servicio,
         cs.nombre AS categoria_servicio,
-        cu.nombre AS cuadrilla
+        cu.nombre AS cuadrilla,
+        ${
+          soportaEmpleadoResponsable
+            ? "e.nombre_completo AS empleado_responsable,"
+            : "NULL::varchar AS empleado_responsable,"
+        }
+        ${
+          soportaEjecucionesProgramacion
+            ? `ultima_ejecucion.fecha_programada AS ultima_ejecucion_fecha,
+        ultima_ejecucion.estado AS ultima_ejecucion_estado,
+        visita_dia.id_ejecucion AS id_ejecucion_dia,
+        visita_dia.estado AS estado_visita_actual,
+        visita_dia.id_orden_trabajo AS id_orden_trabajo_visita`
+            : `NULL::date AS ultima_ejecucion_fecha,
+        NULL::varchar AS ultima_ejecucion_estado,
+        NULL::bigint AS id_ejecucion_dia,
+        NULL::varchar AS estado_visita_actual,
+        NULL::bigint AS id_orden_trabajo_visita`
+        }
       FROM programaciones_servicio ps
       INNER JOIN clientes c ON ps.id_cliente = c.id_cliente
       INNER JOIN propiedades p ON ps.id_propiedad = p.id_propiedad
       INNER JOIN servicios s ON ps.id_servicio = s.id_servicio
       INNER JOIN categorias_servicio cs ON s.id_categoria_servicio = cs.id_categoria_servicio
       LEFT JOIN cuadrillas cu ON ps.id_cuadrilla = cu.id_cuadrilla
+      ${
+        soportaEmpleadoResponsable
+          ? "LEFT JOIN empleados e ON ps.id_empleado_responsable = e.id_empleado"
+          : ""
+      }
+      ${
+        soportaEjecucionesProgramacion
+          ? `
+      LEFT JOIN LATERAL (
+        SELECT
+          pe.fecha_programada,
+          pe.estado
+        FROM programaciones_ejecuciones pe
+        WHERE pe.id_programacion = ps.id_programacion
+        ORDER BY pe.fecha_programada DESC, pe.id_ejecucion DESC
+        LIMIT 1
+      ) AS ultima_ejecucion ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT
+          pe.id_ejecucion,
+          pe.estado,
+          pe.id_orden_trabajo
+        FROM programaciones_ejecuciones pe
+        WHERE pe.id_programacion = ps.id_programacion
+          AND pe.fecha_programada = ps.proxima_fecha
+          AND pe.estado IN ('PENDIENTE', 'GENERADA')
+        ORDER BY pe.id_ejecucion DESC
+        LIMIT 1
+      ) AS visita_dia ON TRUE
+      `
+          : ""
+      }
+    `;
+
+    const programacionesQuery = `
+      ${programacionesBaseSelect}
       WHERE ps.proxima_fecha = $1
         AND ps.estado = 'ACTIVA'
       ORDER BY ps.hora_programada ASC NULLS LAST, ps.id_programacion ASC
+    `;
+
+    const programacionesVencidasQuery = `
+      ${programacionesBaseSelect}
+      WHERE ps.proxima_fecha < $1
+        AND ps.estado = 'ACTIVA'
+      ORDER BY ps.proxima_fecha ASC, ps.hora_programada ASC NULLS LAST, ps.id_programacion ASC
     `;
 
     const ordenesQuery = `
@@ -67,11 +143,20 @@ export const obtenerAgendaDia = async (req, res) => {
         p.id_propiedad,
         p.nombre_propiedad,
         p.direccion,
-        cu.nombre AS cuadrilla
+        cu.nombre AS cuadrilla,
+        te.tecnicos
       FROM ordenes_trabajo ot
       INNER JOIN clientes c ON ot.id_cliente = c.id_cliente
       INNER JOIN propiedades p ON ot.id_propiedad = p.id_propiedad
       LEFT JOIN cuadrillas cu ON ot.id_cuadrilla = cu.id_cuadrilla
+      LEFT JOIN (
+        SELECT
+          oe.id_orden_trabajo,
+          STRING_AGG(e.nombre_completo, ', ' ORDER BY e.nombre_completo) AS tecnicos
+        FROM ordenes_empleados oe
+        INNER JOIN empleados e ON oe.id_empleado = e.id_empleado
+        GROUP BY oe.id_orden_trabajo
+      ) te ON te.id_orden_trabajo = ot.id_orden_trabajo
       WHERE ot.fecha_servicio = $1
       ORDER BY ot.hora_inicio_programada ASC NULLS LAST, ot.id_orden_trabajo ASC
     `;
@@ -93,8 +178,9 @@ export const obtenerAgendaDia = async (req, res) => {
       ORDER BY cr.id_credito DESC
     `;
 
-    const [programaciones, ordenes, creditos] = await Promise.all([
+    const [programaciones, programacionesVencidas, ordenes, creditos] = await Promise.all([
       pool.query(programacionesQuery, [fecha]),
+      pool.query(programacionesVencidasQuery, [fecha]),
       pool.query(ordenesQuery, [fecha]),
       pool.query(creditosQuery, [fecha]),
     ]);
@@ -102,10 +188,12 @@ export const obtenerAgendaDia = async (req, res) => {
     return res.json({
       fecha,
       programaciones: programaciones.rows,
+      programaciones_vencidas: programacionesVencidas.rows,
       ordenes: ordenes.rows,
       vencimientos_credito: creditos.rows,
       resumen: {
         total_programaciones: programaciones.rows.length,
+        total_programaciones_vencidas: programacionesVencidas.rows.length,
         total_ordenes: ordenes.rows.length,
         total_vencimientos_credito: creditos.rows.length,
       },
@@ -130,9 +218,23 @@ export const obtenerAgendaRango = async (req, res) => {
       );
     }
 
+    const soportaEjecucionesProgramacion = await hasPublicColumn(
+      "programaciones_ejecuciones",
+      "id_ejecucion"
+    );
+    const soportaEmpleadoResponsable = await hasPublicColumn(
+      "programaciones_servicio",
+      "id_empleado_responsable"
+    );
+
     const programacionesQuery = `
       SELECT
         ps.id_programacion,
+        ${
+          soportaEmpleadoResponsable
+            ? "ps.id_empleado_responsable,"
+            : "NULL::bigint AS id_empleado_responsable,"
+        }
         ps.proxima_fecha,
         ps.hora_programada,
         ps.frecuencia,
@@ -142,13 +244,63 @@ export const obtenerAgendaRango = async (req, res) => {
         p.nombre_propiedad,
         s.nombre AS servicio,
         cs.nombre AS categoria_servicio,
-        cu.nombre AS cuadrilla
+        cu.nombre AS cuadrilla,
+        ${
+          soportaEmpleadoResponsable
+            ? "e.nombre_completo AS empleado_responsable,"
+            : "NULL::varchar AS empleado_responsable,"
+        }
+        ${
+          soportaEjecucionesProgramacion
+            ? `ultima_ejecucion.fecha_programada AS ultima_ejecucion_fecha,
+        ultima_ejecucion.estado AS ultima_ejecucion_estado,
+        visita_actual.id_ejecucion AS id_ejecucion_actual,
+        visita_actual.estado AS estado_visita_actual,
+        visita_actual.id_orden_trabajo AS id_orden_trabajo_visita`
+            : `NULL::date AS ultima_ejecucion_fecha,
+        NULL::varchar AS ultima_ejecucion_estado,
+        NULL::bigint AS id_ejecucion_actual,
+        NULL::varchar AS estado_visita_actual,
+        NULL::bigint AS id_orden_trabajo_visita`
+        }
       FROM programaciones_servicio ps
       INNER JOIN clientes c ON ps.id_cliente = c.id_cliente
       INNER JOIN propiedades p ON ps.id_propiedad = p.id_propiedad
       INNER JOIN servicios s ON ps.id_servicio = s.id_servicio
       INNER JOIN categorias_servicio cs ON s.id_categoria_servicio = cs.id_categoria_servicio
       LEFT JOIN cuadrillas cu ON ps.id_cuadrilla = cu.id_cuadrilla
+      ${
+        soportaEmpleadoResponsable
+          ? "LEFT JOIN empleados e ON ps.id_empleado_responsable = e.id_empleado"
+          : ""
+      }
+      ${
+        soportaEjecucionesProgramacion
+          ? `
+      LEFT JOIN LATERAL (
+        SELECT
+          pe.fecha_programada,
+          pe.estado
+        FROM programaciones_ejecuciones pe
+        WHERE pe.id_programacion = ps.id_programacion
+        ORDER BY pe.fecha_programada DESC, pe.id_ejecucion DESC
+        LIMIT 1
+      ) AS ultima_ejecucion ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT
+          pe.id_ejecucion,
+          pe.estado,
+          pe.id_orden_trabajo
+        FROM programaciones_ejecuciones pe
+        WHERE pe.id_programacion = ps.id_programacion
+          AND pe.fecha_programada = ps.proxima_fecha
+          AND pe.estado IN ('PENDIENTE', 'GENERADA')
+        ORDER BY pe.id_ejecucion DESC
+        LIMIT 1
+      ) AS visita_actual ON TRUE
+      `
+          : ""
+      }
       WHERE ps.proxima_fecha BETWEEN $1 AND $2
         AND ps.estado = 'ACTIVA'
       ORDER BY ps.proxima_fecha ASC, ps.hora_programada ASC NULLS LAST

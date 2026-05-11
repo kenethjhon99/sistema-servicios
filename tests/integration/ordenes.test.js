@@ -590,3 +590,69 @@ describe("GET /api/ordenes — listar", () => {
     expect(countCall[1]).toEqual(["PENDIENTE", "42"]);
   });
 });
+
+describe("PATCH /api/ordenes/:id/estado - programaciones vinculadas", () => {
+  const supervisor = () => makeUsuario({ id_usuario: 1, rol: "SUPERVISOR" });
+
+  beforeEach(() => primeTx());
+
+  it("al completar una orden vinculada completa la visita y avanza la programacion", async () => {
+    const auth = primeAuth(poolMock, supervisor());
+    const ordenAnterior = { id_orden_trabajo: 1, numero_orden: "OT-X", estado: "EN_PROCESO" };
+    const ordenNueva = { ...ordenAnterior, estado: "COMPLETADA" };
+
+    let i = 0;
+    const responses = [
+      { rows: [ordenAnterior] },
+      { rows: [ordenNueva] },
+      {
+        rows: [
+          {
+            id_ejecucion: 99,
+            id_programacion: 12,
+            fecha_programada: "2026-05-20",
+            frecuencia: "SEMANAL",
+            estado_programacion: "ACTIVA",
+            proxima_fecha: "2026-05-20",
+          },
+        ],
+      },
+      { rows: [{ id_ejecucion: 99, estado: "COMPLETADA" }] },
+      {
+        rows: [
+          {
+            id_programacion: 12,
+            estado: "ACTIVA",
+            proxima_fecha: "2026-05-27",
+          },
+        ],
+      },
+      { rows: [] },
+      { rows: [] },
+      { rows: [] },
+    ];
+    clientMock.query.mockImplementation((sql) => {
+      const txt = String(sql).trim().toUpperCase();
+      if (txt === "BEGIN" || txt === "COMMIT" || txt === "ROLLBACK") {
+        return Promise.resolve({ rows: [] });
+      }
+      const r = responses[i] ?? { rows: [] };
+      i++;
+      return Promise.resolve(r);
+    });
+
+    const res = await request(app)
+      .patch("/api/ordenes/1/estado")
+      .set("Authorization", auth)
+      .send({ estado: "COMPLETADA" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.estado).toBe("COMPLETADA");
+
+    const updateProgramacionCall = clientMock.query.mock.calls.find((c) =>
+      /UPDATE programaciones_servicio/i.test(String(c[0]))
+    );
+    expect(updateProgramacionCall).toBeDefined();
+    expect(updateProgramacionCall[1][0]).toBe("2026-05-27");
+  });
+});

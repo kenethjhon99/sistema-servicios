@@ -3,6 +3,7 @@ import { apiErrorText, localizeInlineText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 import { validarUrlPublica } from "../utils/url.js";
 import { hasPublicColumn } from "../utils/schema.js";
+import { calcularSiguienteFechaProgramacion } from "../utils/programaciones.js";
 
 const TIPOS_VISITA_VALIDOS = ["PROGRAMADA", "EXTRA", "URGENTE"];
 const ORIGENES_VALIDOS = ["MANUAL", "PROGRAMACION", "COTIZACION"];
@@ -1415,6 +1416,121 @@ export const cambiarEstadoOrdenTrabajo = async (req, res) => {
     );
 
     const orden = rows[0];
+    const nuevoEstado = estado.toUpperCase();
+
+    const ejecucionProgramadaResult = await client.query(
+      `
+        SELECT
+          pe.*,
+          ps.frecuencia,
+          ps.estado AS estado_programacion,
+          ps.proxima_fecha
+        FROM programaciones_ejecuciones pe
+        INNER JOIN programaciones_servicio ps
+          ON ps.id_programacion = pe.id_programacion
+        WHERE pe.id_orden_trabajo = $1
+        LIMIT 1
+      `,
+      [id]
+    );
+
+    const ejecucionProgramada = ejecucionProgramadaResult.rows[0] || null;
+
+    if (ejecucionProgramada && nuevoEstado === "COMPLETADA") {
+      const ejecucionActualizadaResult = await client.query(
+        `
+          UPDATE programaciones_ejecuciones
+          SET estado = 'COMPLETADA',
+              fecha_cierre = NOW(),
+              resultado = 'COMPLETADA',
+              updated_at = NOW(),
+              updated_by = $1
+          WHERE id_ejecucion = $2
+          RETURNING *
+        `,
+        [userId, ejecucionProgramada.id_ejecucion]
+      );
+
+      const siguienteFecha = calcularSiguienteFechaProgramacion(
+        ejecucionProgramada.fecha_programada,
+        ejecucionProgramada.frecuencia
+      );
+
+      const programacionActualizadaResult = await client.query(
+        `
+          UPDATE programaciones_servicio
+          SET estado = CASE WHEN frecuencia = 'UNICA' THEN 'FINALIZADA' ELSE estado END,
+              proxima_fecha = CASE
+                WHEN frecuencia = 'UNICA' THEN proxima_fecha
+                ELSE COALESCE($1, proxima_fecha)
+              END,
+              updated_at = NOW(),
+              updated_by = $2
+          WHERE id_programacion = $3
+          RETURNING *
+        `,
+        [siguienteFecha, userId, ejecucionProgramada.id_programacion]
+      );
+
+      await registrarAuditoria({
+        client,
+        tabla_afectada: "programaciones_ejecuciones",
+        id_registro: ejecucionProgramada.id_ejecucion,
+        accion: "CAMBIAR_ESTADO",
+        descripcion: `La visita ${ejecucionProgramada.id_ejecucion} quedó completada al cerrar la orden ${orden.numero_orden}`,
+        valores_anteriores: ejecucionProgramada,
+        valores_nuevos: ejecucionActualizadaResult.rows[0],
+        realizado_por: userId,
+      });
+
+      await registrarAuditoria({
+        client,
+        tabla_afectada: "programaciones_servicio",
+        id_registro: ejecucionProgramada.id_programacion,
+        accion: "ACTUALIZAR",
+        descripcion:
+          ejecucionProgramada.frecuencia === "UNICA"
+            ? `La programación ${ejecucionProgramada.id_programacion} se finalizó al completar la orden ${orden.numero_orden}`
+            : `La programación ${ejecucionProgramada.id_programacion} avanzó a la próxima fecha ${programacionActualizadaResult.rows[0]?.proxima_fecha || siguienteFecha}`,
+        valores_anteriores: {
+          id_programacion: ejecucionProgramada.id_programacion,
+          frecuencia: ejecucionProgramada.frecuencia,
+          estado: ejecucionProgramada.estado_programacion,
+          proxima_fecha: ejecucionProgramada.proxima_fecha,
+        },
+        valores_nuevos: programacionActualizadaResult.rows[0] || null,
+        realizado_por: userId,
+      });
+    }
+
+    if (ejecucionProgramada && nuevoEstado === "CANCELADA") {
+      const ejecucionCanceladaResult = await client.query(
+        `
+          UPDATE programaciones_ejecuciones
+          SET estado = 'CANCELADA',
+              motivo_cancelacion = COALESCE($1, motivo_cancelacion),
+              updated_at = NOW(),
+              updated_by = $2
+          WHERE id_ejecucion = $3
+            AND estado NOT IN ('COMPLETADA', 'REPROGRAMADA', 'CANCELADA')
+          RETURNING *
+        `,
+        [motivo_cancelacion?.trim() || null, userId, ejecucionProgramada.id_ejecucion]
+      );
+
+      if (ejecucionCanceladaResult.rows[0]) {
+        await registrarAuditoria({
+          client,
+          tabla_afectada: "programaciones_ejecuciones",
+          id_registro: ejecucionProgramada.id_ejecucion,
+          accion: "CANCELAR",
+          descripcion: `La visita ${ejecucionProgramada.id_ejecucion} se canceló al cancelar la orden ${orden.numero_orden}`,
+          valores_anteriores: ejecucionProgramada,
+          valores_nuevos: ejecucionCanceladaResult.rows[0],
+          realizado_por: userId,
+        });
+      }
+    }
 
     await registrarAuditoria({
       client,
