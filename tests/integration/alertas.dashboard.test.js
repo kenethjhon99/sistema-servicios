@@ -90,4 +90,41 @@ describe("Alertas - dashboard base", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/fecha desde/i);
   });
+
+  it("localiza las alertas recientes al ingles cuando el request lo pide", async () => {
+    const auth = primeAuth(poolMock, makeUsuario({ rol: "ADMIN" }));
+
+    poolMock.query
+      .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+      .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id_alerta: 9,
+            tipo_alerta: "SERVICIO_HOY",
+            titulo: "Servicio programado para hoy",
+            mensaje: "Cliente Demo - Casa Central - Limpieza",
+            modulo_origen: "PROGRAMACION",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const res = await request(app)
+      .get("/api/alertas/dashboard/base")
+      .set("Authorization", auth)
+      .set("X-App-Locale", "en");
+
+    expect(res.status).toBe(200);
+    expect(res.body.ultimas_alertas[0]).toMatchObject({
+      titulo: "Service scheduled for today",
+      mensaje: "Cliente Demo - Casa Central - Limpieza",
+    });
+  });
 });

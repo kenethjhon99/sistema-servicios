@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { apiErrorText, localizeInlineText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 import { hasPublicColumn } from "../utils/schema.js";
 
@@ -170,7 +171,7 @@ const consultarListadoProgramaciones = async ({
   };
 };
 
-const validarEmpleadoResponsable = async (id_empleado_responsable, id_cuadrilla) => {
+const validarEmpleadoResponsable = async (req, id_empleado_responsable, id_cuadrilla) => {
   if (!id_empleado_responsable) {
     return { ok: true, empleado: null };
   }
@@ -181,13 +182,21 @@ const validarEmpleadoResponsable = async (id_empleado_responsable, id_cuadrilla)
   );
 
   if (empleadoResult.rows.length === 0) {
-    return { ok: false, status: 404, error: "El tecnico responsable no existe" };
+    return {
+      ok: false,
+      status: 404,
+      error: localizeInlineText(req, "El responsable asignado no existe", "Assigned staff member does not exist"),
+    };
   }
 
   const empleado = empleadoResult.rows[0];
 
   if (empleado.estado !== "ACTIVO") {
-    return { ok: false, status: 400, error: "No se puede asignar un tecnico inactivo" };
+    return {
+      ok: false,
+      status: 400,
+      error: localizeInlineText(req, "No se puede asignar un empleado inactivo", "Cannot assign an inactive employee"),
+    };
   }
 
   if (
@@ -198,7 +207,11 @@ const validarEmpleadoResponsable = async (id_empleado_responsable, id_cuadrilla)
     return {
       ok: false,
       status: 400,
-      error: "El tecnico responsable no pertenece a la cuadrilla seleccionada",
+      error: localizeInlineText(
+        req,
+        "El responsable asignado no pertenece al grupo seleccionado",
+        "The assigned staff member does not belong to the selected group"
+      ),
     };
   }
 
@@ -206,6 +219,7 @@ const validarEmpleadoResponsable = async (id_empleado_responsable, id_cuadrilla)
 };
 
 const validarDisponibilidadEmpleadoProgramacion = async (
+  req,
   id_empleado_responsable,
   proxima_fecha,
   excludeProgramacionId = null
@@ -240,7 +254,11 @@ const validarDisponibilidadEmpleadoProgramacion = async (
     return {
       ok: false,
       status: 409,
-      error: `El tecnico responsable ya tiene una programacion activa para la fecha ${proxima_fecha}`,
+      error: localizeInlineText(
+        req,
+        `El responsable asignado ya tiene una programacion activa para la fecha ${proxima_fecha}`,
+        `The assigned staff member already has an active schedule for ${proxima_fecha}`
+      ),
     };
   }
 
@@ -274,15 +292,15 @@ export const crearProgramacion = async (req, res) => {
       : null;
 
     if (!id_cliente) {
-      return res.status(400).json({ error: "El cliente es obligatorio" });
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
     }
 
     if (!id_propiedad) {
-      return res.status(400).json({ error: "La propiedad es obligatoria" });
+      return apiErrorText(res, req, 400, "La propiedad es obligatoria", "Property is required");
     }
 
     if (!id_servicio) {
-      return res.status(400).json({ error: "El servicio es obligatorio" });
+      return apiErrorText(res, req, 400, "El servicio es obligatorio", "Service is required");
     }
 
     if (!frecuencia || !FRECUENCIAS_VALIDAS.includes(frecuencia.toUpperCase())) {
@@ -377,6 +395,7 @@ export const crearProgramacion = async (req, res) => {
     }
 
     const empleadoValidacion = await validarEmpleadoResponsable(
+      req,
       empleadoResponsableFinal,
       id_cuadrilla
     );
@@ -385,6 +404,7 @@ export const crearProgramacion = async (req, res) => {
     }
 
     const disponibilidadEmpleado = await validarDisponibilidadEmpleadoProgramacion(
+      req,
       empleadoResponsableFinal,
       proxima_fecha
     );
@@ -489,7 +509,7 @@ export const crearProgramacion = async (req, res) => {
     return res.status(201).json(programacion);
   } catch (error) {
     console.error("Error al crear programación:", error);
-    return res.status(500).json({ error: "Error interno al crear programación" });
+    return apiErrorText(res, req, 500, "Error interno al crear programación", "Internal error while creating schedule");
   }
 };
 
@@ -571,7 +591,7 @@ export const listarProgramaciones = async (req, res) => {
     }
 
     console.error("Error al listar programaciones:", error);
-    return res.status(500).json({ error: "Error interno al listar programaciones" });
+    return apiErrorText(res, req, 500, "Error interno al listar programaciones", "Internal error while listing schedules");
   }
 };
 
@@ -618,13 +638,13 @@ export const obtenerProgramacionPorId = async (req, res) => {
     const { rows } = await pool.query(query, [id]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Programación no encontrada" });
+      return apiErrorText(res, req, 404, "Programación no encontrada", "Schedule not found");
     }
 
     return res.json(rows[0]);
   } catch (error) {
     console.error("Error al obtener programación:", error);
-    return res.status(500).json({ error: "Error interno al obtener programación" });
+    return apiErrorText(res, req, 500, "Error interno al obtener programación", "Internal error while loading schedule");
   }
 };
 
@@ -771,6 +791,7 @@ export const actualizarProgramacion = async (req, res) => {
     }
 
     const empleadoValidacion = await validarEmpleadoResponsable(
+      req,
       empleadoResponsableFinal,
       id_cuadrilla
     );
@@ -779,6 +800,7 @@ export const actualizarProgramacion = async (req, res) => {
     }
 
     const disponibilidadEmpleado = await validarDisponibilidadEmpleadoProgramacion(
+      req,
       empleadoResponsableFinal,
       proxima_fecha,
       Number(id)
@@ -874,7 +896,7 @@ export const actualizarProgramacion = async (req, res) => {
     const { rows } = await pool.query(query, values);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Programación no encontrada" });
+      return apiErrorText(res, req, 404, "Programación no encontrada", "Schedule not found");
     }
 
     const programacion = rows[0];
@@ -892,7 +914,7 @@ export const actualizarProgramacion = async (req, res) => {
     return res.json(programacion);
   } catch (error) {
     console.error("Error al actualizar programación:", error);
-    return res.status(500).json({ error: "Error interno al actualizar programación" });
+    return apiErrorText(res, req, 500, "Error interno al actualizar programación", "Internal error while updating schedule");
   }
 };
 
@@ -902,12 +924,16 @@ export const cambiarEstadoProgramacion = async (req, res) => {
     const { estado, motivo_cancelacion } = req.body;
 
     if (!estado || !ESTADOS_VALIDOS.includes(estado.toUpperCase())) {
-      return res.status(400).json({ error: "Estado inválido" });
+      return apiErrorText(res, req, 400, "Estado inválido", "Invalid status");
     }
 
     if (estado.toUpperCase() === "CANCELADA" && (!motivo_cancelacion || !motivo_cancelacion.trim())) {
       return res.status(400).json({
-        error: "Debe enviar un motivo de cancelación al cancelar la programación",
+        error: localizeInlineText(
+          req,
+          "Debe enviar un motivo de cancelación al cancelar la programación",
+          "You must provide a cancellation reason when cancelling the schedule"
+        ),
       });
     }
 
@@ -917,7 +943,7 @@ export const cambiarEstadoProgramacion = async (req, res) => {
     );
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Programación no encontrada" });
+      return apiErrorText(res, req, 404, "Programación no encontrada", "Schedule not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -945,7 +971,7 @@ export const cambiarEstadoProgramacion = async (req, res) => {
     const { rows } = await pool.query(query, values);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Programación no encontrada" });
+      return apiErrorText(res, req, 404, "Programación no encontrada", "Schedule not found");
     }
 
     const programacion = rows[0];
@@ -965,6 +991,6 @@ export const cambiarEstadoProgramacion = async (req, res) => {
     return res.json(programacion);
   } catch (error) {
     console.error("Error al cambiar estado de programación:", error);
-    return res.status(500).json({ error: "Error interno al cambiar estado de programación" });
+    return apiErrorText(res, req, 500, "Error interno al cambiar estado de programación", "Internal error while changing schedule status");
   }
 };

@@ -1,6 +1,8 @@
 import bcrypt from "bcrypt";
 import { pool } from "../config/db.js";
+import { apiError, apiMessage } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
+import { resolveApiLocale } from "../utils/apiLocale.js";
 import { BCRYPT_ROUNDS, validarPassword } from "../utils/password.js";
 
 const ROLES_VALIDOS = ["ADMIN", "SUPERVISOR", "OPERADOR", "COBRADOR"];
@@ -11,7 +13,7 @@ export const listarUsuarios = async (req, res) => {
     const { estado, rol, busqueda } = req.query;
     const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let whereClause = ` WHERE 1=1 `;
+    let whereClause = " WHERE 1=1 ";
     const values = [];
     let index = 1;
 
@@ -69,7 +71,7 @@ export const listarUsuarios = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al listar usuarios:", error);
-    return res.status(500).json({ error: "Error interno al listar usuarios" });
+    return apiError(res, req, 500, "users.listError");
   }
 };
 
@@ -95,42 +97,36 @@ export const obtenerUsuarioPorId = async (req, res) => {
     const { rows } = await pool.query(query, [id]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      return apiError(res, req, 404, "users.notFound");
     }
 
     return res.json(rows[0]);
   } catch (error) {
     console.error("Error al obtener usuario:", error);
-    return res.status(500).json({ error: "Error interno al obtener usuario" });
+    return apiError(res, req, 500, "users.fetchError");
   }
 };
 
 export const crearUsuario = async (req, res) => {
   try {
-    const {
-      nombre,
-      correo,
-      telefono,
-      username,
-      password,
-      rol,
-    } = req.body;
+    const { nombre, correo, telefono, username, password, rol } = req.body;
+    const locale = resolveApiLocale(req);
 
     if (!nombre || !nombre.trim()) {
-      return res.status(400).json({ error: "El nombre es obligatorio" });
+      return apiError(res, req, 400, "users.nameRequired");
     }
 
     if (!username || !username.trim()) {
-      return res.status(400).json({ error: "El username es obligatorio" });
+      return apiError(res, req, 400, "users.usernameRequired");
     }
 
-    const passwordCheck = validarPassword(password);
+    const passwordCheck = validarPassword(password, locale);
     if (!passwordCheck.valid) {
       return res.status(400).json({ error: passwordCheck.error });
     }
 
     if (!rol || !ROLES_VALIDOS.includes(rol.toUpperCase())) {
-      return res.status(400).json({ error: "Rol inválido" });
+      return apiError(res, req, 400, "users.invalidRole");
     }
 
     const existeUsuario = await pool.query(
@@ -144,9 +140,7 @@ export const crearUsuario = async (req, res) => {
     );
 
     if (existeUsuario.rows.length > 0) {
-      return res.status(409).json({
-        error: "Ya existe un usuario con ese username o correo",
-      });
+      return apiError(res, req, 409, "users.duplicateUser");
     }
 
     const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
@@ -203,31 +197,25 @@ export const crearUsuario = async (req, res) => {
     return res.status(201).json(usuario);
   } catch (error) {
     console.error("Error al crear usuario:", error);
-    return res.status(500).json({ error: "Error interno al crear usuario" });
+    return apiError(res, req, 500, "users.createError");
   }
 };
 
 export const actualizarUsuario = async (req, res) => {
   try {
     const { id } = req.params;
-    const {
-      nombre,
-      correo,
-      telefono,
-      username,
-      rol,
-    } = req.body;
+    const { nombre, correo, telefono, username, rol } = req.body;
 
     if (!nombre || !nombre.trim()) {
-      return res.status(400).json({ error: "El nombre es obligatorio" });
+      return apiError(res, req, 400, "users.nameRequired");
     }
 
     if (!username || !username.trim()) {
-      return res.status(400).json({ error: "El username es obligatorio" });
+      return apiError(res, req, 400, "users.usernameRequired");
     }
 
     if (!rol || !ROLES_VALIDOS.includes(rol.toUpperCase())) {
-      return res.status(400).json({ error: "Rol inválido" });
+      return apiError(res, req, 400, "users.invalidRole");
     }
 
     const anteriorResult = await pool.query(
@@ -249,7 +237,7 @@ export const actualizarUsuario = async (req, res) => {
     );
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      return apiError(res, req, 404, "users.notFound");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -265,9 +253,7 @@ export const actualizarUsuario = async (req, res) => {
     );
 
     if (existeDuplicado.rows.length > 0) {
-      return res.status(409).json({
-        error: "Ya existe otro usuario con ese username o correo",
-      });
+      return apiError(res, req, 409, "users.duplicateOtherUser");
     }
 
     const query = `
@@ -320,7 +306,7 @@ export const actualizarUsuario = async (req, res) => {
     return res.json(usuario);
   } catch (error) {
     console.error("Error al actualizar usuario:", error);
-    return res.status(500).json({ error: "Error interno al actualizar usuario" });
+    return apiError(res, req, 500, "users.updateError");
   }
 };
 
@@ -330,11 +316,11 @@ export const cambiarEstadoUsuario = async (req, res) => {
     const { estado } = req.body;
 
     if (!estado || !ESTADOS_VALIDOS.includes(estado.toUpperCase())) {
-      return res.status(400).json({ error: "Estado inválido" });
+      return apiError(res, req, 400, "users.invalidState");
     }
 
     if (Number(req.user.id_usuario) === Number(id) && estado.toUpperCase() === "INACTIVO") {
-      return res.status(400).json({ error: "No puedes inactivar tu propio usuario" });
+      return apiError(res, req, 400, "users.cannotDeactivateSelf");
     }
 
     const anteriorResult = await pool.query(
@@ -354,7 +340,7 @@ export const cambiarEstadoUsuario = async (req, res) => {
     );
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      return apiError(res, req, 404, "users.notFound");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -400,25 +386,26 @@ export const cambiarEstadoUsuario = async (req, res) => {
     return res.json(usuario);
   } catch (error) {
     console.error("Error al cambiar estado del usuario:", error);
-    return res.status(500).json({ error: "Error interno al cambiar estado del usuario" });
+    return apiError(res, req, 500, "users.stateChangeError");
   }
 };
 
 export const cambiarMiPassword = async (req, res) => {
   try {
     const { password_actual, password_nueva, confirmar_password } = req.body;
+    const locale = resolveApiLocale(req);
 
     if (!password_actual) {
-      return res.status(400).json({ error: "La contraseña actual es obligatoria" });
+      return apiError(res, req, 400, "users.currentPasswordRequired");
     }
 
-    const passwordCheck = validarPassword(password_nueva);
+    const passwordCheck = validarPassword(password_nueva, locale);
     if (!passwordCheck.valid) {
       return res.status(400).json({ error: passwordCheck.error });
     }
 
     if (password_nueva !== confirmar_password) {
-      return res.status(400).json({ error: "La confirmación de contraseña no coincide" });
+      return apiError(res, req, 400, "users.confirmPasswordMismatch");
     }
 
     const userResult = await pool.query(
@@ -427,22 +414,19 @@ export const cambiarMiPassword = async (req, res) => {
     );
 
     if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      return apiError(res, req, 404, "users.notFound");
     }
 
     const usuario = userResult.rows[0];
-
     const passwordOk = await bcrypt.compare(password_actual, usuario.password_hash);
 
     if (!passwordOk) {
-      return res.status(400).json({ error: "La contraseña actual es incorrecta" });
+      return apiError(res, req, 400, "users.currentPasswordIncorrect");
     }
 
     const mismaPassword = await bcrypt.compare(password_nueva, usuario.password_hash);
     if (mismaPassword) {
-      return res.status(400).json({
-        error: "La nueva contraseña no puede ser igual a la actual",
-      });
+      return apiError(res, req, 400, "users.newPasswordSame");
     }
 
     const nuevoHash = await bcrypt.hash(password_nueva, BCRYPT_ROUNDS);
@@ -457,12 +441,10 @@ export const cambiarMiPassword = async (req, res) => {
       [nuevoHash, req.user.id_usuario]
     );
 
-    return res.json({
-      mensaje: "Contraseña actualizada correctamente",
-    });
+    return apiMessage(res, req, {}, "users.passwordUpdated");
   } catch (error) {
     console.error("Error al cambiar mi contraseña:", error);
-    return res.status(500).json({ error: "Error interno al cambiar la contraseña" });
+    return apiError(res, req, 500, "users.passwordUpdateError");
   }
 };
 
@@ -470,14 +452,15 @@ export const resetearPasswordUsuario = async (req, res) => {
   try {
     const { id } = req.params;
     const { password_nueva, confirmar_password } = req.body;
+    const locale = resolveApiLocale(req);
 
-    const passwordCheck = validarPassword(password_nueva);
+    const passwordCheck = validarPassword(password_nueva, locale);
     if (!passwordCheck.valid) {
       return res.status(400).json({ error: passwordCheck.error });
     }
 
     if (password_nueva !== confirmar_password) {
-      return res.status(400).json({ error: "La confirmación de contraseña no coincide" });
+      return apiError(res, req, 400, "users.confirmPasswordMismatch");
     }
 
     const userResult = await pool.query(
@@ -486,7 +469,7 @@ export const resetearPasswordUsuario = async (req, res) => {
     );
 
     if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      return apiError(res, req, 404, "users.notFound");
     }
 
     const usuario = userResult.rows[0];
@@ -512,11 +495,9 @@ export const resetearPasswordUsuario = async (req, res) => {
       realizado_por: req.user?.id_usuario || null,
     });
 
-    return res.json({
-      mensaje: "Contraseña reseteada correctamente",
-    });
+    return apiMessage(res, req, {}, "users.passwordResetDone");
   } catch (error) {
     console.error("Error al resetear contraseña del usuario:", error);
-    return res.status(500).json({ error: "Error interno al resetear contraseña" });
+    return apiError(res, req, 500, "users.passwordResetError");
   }
 };

@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { apiErrorText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 
 const TIPOS_PROPIEDAD = [
@@ -32,19 +33,25 @@ export const crearPropiedad = async (req, res) => {
     } = req.body;
 
     if (!id_cliente) {
-      return res.status(400).json({ error: "El cliente es obligatorio" });
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
     }
 
     if (!nombre_propiedad || !nombre_propiedad.trim()) {
-      return res.status(400).json({ error: "El nombre de la propiedad es obligatorio" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "El nombre de la propiedad es obligatorio",
+        "Property name is required"
+      );
     }
 
     if (!tipo_propiedad || !TIPOS_PROPIEDAD.includes(tipo_propiedad.toUpperCase())) {
-      return res.status(400).json({ error: "Tipo de propiedad inválido" });
+      return apiErrorText(res, req, 400, "Tipo de propiedad inválido", "Invalid property type");
     }
 
     if (!direccion || !direccion.trim()) {
-      return res.status(400).json({ error: "La dirección es obligatoria" });
+      return apiErrorText(res, req, 400, "La dirección es obligatoria", "Address is required");
     }
 
     const existeCliente = await pool.query(
@@ -53,11 +60,17 @@ export const crearPropiedad = async (req, res) => {
     );
 
     if (existeCliente.rows.length === 0) {
-      return res.status(404).json({ error: "El cliente no existe" });
+      return apiErrorText(res, req, 404, "El cliente no existe", "Client does not exist");
     }
 
     if (existeCliente.rows[0].estado !== "ACTIVO") {
-      return res.status(400).json({ error: "No se puede agregar propiedad a un cliente inactivo" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "No se puede agregar propiedad a un cliente inactivo",
+        "Cannot add a property to an inactive client"
+      );
     }
 
     const query = `
@@ -117,7 +130,7 @@ export const crearPropiedad = async (req, res) => {
     return res.status(201).json(propiedad);
   } catch (error) {
     console.error("Error al crear propiedad:", error);
-    return res.status(500).json({ error: "Error interno al crear propiedad" });
+    return apiErrorText(res, req, 500, "Error interno al crear propiedad", "Internal error while creating property");
   }
 };
 
@@ -126,7 +139,7 @@ export const listarPropiedades = async (req, res) => {
     const { estado, id_cliente, tipo_propiedad, busqueda } = req.query;
     const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let whereClause = ` WHERE 1=1 `;
+    let whereClause = " WHERE 1=1 ";
     const values = [];
     let index = 1;
 
@@ -192,7 +205,7 @@ export const listarPropiedades = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al listar propiedades:", error);
-    return res.status(500).json({ error: "Error interno al listar propiedades" });
+    return apiErrorText(res, req, 500, "Error interno al listar propiedades", "Internal error while listing properties");
   }
 };
 
@@ -206,7 +219,7 @@ export const listarPropiedadesPorCliente = async (req, res) => {
     );
 
     if (existeCliente.rows.length === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado" });
+      return apiErrorText(res, req, 404, "Cliente no encontrado", "Client not found");
     }
 
     const query = `
@@ -220,7 +233,13 @@ export const listarPropiedadesPorCliente = async (req, res) => {
     return res.json(rows);
   } catch (error) {
     console.error("Error al listar propiedades del cliente:", error);
-    return res.status(500).json({ error: "Error interno al listar propiedades del cliente" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al listar propiedades del cliente",
+      "Internal error while listing client properties"
+    );
   }
 };
 
@@ -242,13 +261,13 @@ export const obtenerPropiedadPorId = async (req, res) => {
     const { rows } = await pool.query(query, [id]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Propiedad no encontrada" });
+      return apiErrorText(res, req, 404, "Propiedad no encontrada", "Property not found");
     }
 
     return res.json(rows[0]);
   } catch (error) {
     console.error("Error al obtener propiedad:", error);
-    return res.status(500).json({ error: "Error interno al obtener propiedad" });
+    return apiErrorText(res, req, 500, "Error interno al obtener propiedad", "Internal error while loading property");
   }
 };
 
@@ -272,28 +291,31 @@ export const actualizarPropiedad = async (req, res) => {
     } = req.body;
 
     if (!id_cliente) {
-      return res.status(400).json({ error: "El cliente es obligatorio" });
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
     }
 
     if (!nombre_propiedad || !nombre_propiedad.trim()) {
-      return res.status(400).json({ error: "El nombre de la propiedad es obligatorio" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "El nombre de la propiedad es obligatorio",
+        "Property name is required"
+      );
     }
 
     if (!tipo_propiedad || !TIPOS_PROPIEDAD.includes(tipo_propiedad.toUpperCase())) {
-      return res.status(400).json({ error: "Tipo de propiedad inválido" });
+      return apiErrorText(res, req, 400, "Tipo de propiedad inválido", "Invalid property type");
     }
 
     if (!direccion || !direccion.trim()) {
-      return res.status(400).json({ error: "La dirección es obligatoria" });
+      return apiErrorText(res, req, 400, "La dirección es obligatoria", "Address is required");
     }
 
-    const anteriorResult = await pool.query(
-      `SELECT * FROM propiedades WHERE id_propiedad = $1`,
-      [id]
-    );
+    const anteriorResult = await pool.query(`SELECT * FROM propiedades WHERE id_propiedad = $1`, [id]);
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Propiedad no encontrada" });
+      return apiErrorText(res, req, 404, "Propiedad no encontrada", "Property not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -304,11 +326,17 @@ export const actualizarPropiedad = async (req, res) => {
     );
 
     if (existeCliente.rows.length === 0) {
-      return res.status(404).json({ error: "El cliente no existe" });
+      return apiErrorText(res, req, 404, "El cliente no existe", "Client does not exist");
     }
 
     if (existeCliente.rows[0].estado !== "ACTIVO") {
-      return res.status(400).json({ error: "No se puede asignar a un cliente inactivo" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "No se puede asignar a un cliente inactivo",
+        "Cannot assign to an inactive client"
+      );
     }
 
     const query = `
@@ -368,7 +396,7 @@ export const actualizarPropiedad = async (req, res) => {
     return res.json(propiedad);
   } catch (error) {
     console.error("Error al actualizar propiedad:", error);
-    return res.status(500).json({ error: "Error interno al actualizar propiedad" });
+    return apiErrorText(res, req, 500, "Error interno al actualizar propiedad", "Internal error while updating property");
   }
 };
 
@@ -378,16 +406,19 @@ export const cambiarEstadoPropiedad = async (req, res) => {
     const { estado } = req.body;
 
     if (!estado || !ESTADOS_VALIDOS.includes(estado.toUpperCase())) {
-      return res.status(400).json({ error: "Estado inválido. Use ACTIVA o INACTIVA" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Estado inválido. Use ACTIVA o INACTIVA",
+        "Invalid status. Use ACTIVA or INACTIVA"
+      );
     }
 
-    const anteriorResult = await pool.query(
-      `SELECT * FROM propiedades WHERE id_propiedad = $1`,
-      [id]
-    );
+    const anteriorResult = await pool.query(`SELECT * FROM propiedades WHERE id_propiedad = $1`, [id]);
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Propiedad no encontrada" });
+      return apiErrorText(res, req, 404, "Propiedad no encontrada", "Property not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -422,6 +453,12 @@ export const cambiarEstadoPropiedad = async (req, res) => {
     return res.json(propiedad);
   } catch (error) {
     console.error("Error al cambiar estado de propiedad:", error);
-    return res.status(500).json({ error: "Error interno al cambiar estado de propiedad" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al cambiar estado de propiedad",
+      "Internal error while changing property status"
+    );
   }
 };

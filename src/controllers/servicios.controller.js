@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { apiErrorText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 
 export const crearServicio = async (req, res) => {
@@ -14,15 +15,27 @@ export const crearServicio = async (req, res) => {
     } = req.body;
 
     if (!id_categoria_servicio) {
-      return res.status(400).json({ error: "La categoría es obligatoria" });
+      return apiErrorText(res, req, 400, "La categoría es obligatoria", "Category is required");
     }
 
     if (!nombre || !nombre.trim()) {
-      return res.status(400).json({ error: "El nombre del servicio es obligatorio" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "El nombre del servicio es obligatorio",
+        "Service name is required"
+      );
     }
 
     if (!duracion_estimada_min || Number(duracion_estimada_min) <= 0) {
-      return res.status(400).json({ error: "La duración estimada debe ser mayor a 0" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "La duración estimada debe ser mayor a 0",
+        "Estimated duration must be greater than 0"
+      );
     }
 
     const existeCategoria = await pool.query(
@@ -35,11 +48,23 @@ export const crearServicio = async (req, res) => {
     );
 
     if (existeCategoria.rows.length === 0) {
-      return res.status(404).json({ error: "La categoría seleccionada no existe" });
+      return apiErrorText(
+        res,
+        req,
+        404,
+        "La categoría seleccionada no existe",
+        "Selected category does not exist"
+      );
     }
 
     if (existeCategoria.rows[0].estado !== "ACTIVA") {
-      return res.status(400).json({ error: "No se puede usar una categoría inactiva" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "No se puede usar una categoría inactiva",
+        "Cannot use an inactive category"
+      );
     }
 
     const query = `
@@ -87,13 +112,17 @@ export const crearServicio = async (req, res) => {
     return res.status(201).json(servicio);
   } catch (error) {
     if (error.code === "23505") {
-      return res.status(409).json({
-        error: "Ya existe un servicio con ese nombre en la categoría seleccionada",
-      });
+      return apiErrorText(
+        res,
+        req,
+        409,
+        "Ya existe un servicio con ese nombre en la categoría seleccionada",
+        "A service with that name already exists in the selected category"
+      );
     }
 
     console.error("Error al crear servicio:", error);
-    return res.status(500).json({ error: "Error interno al crear servicio" });
+    return apiErrorText(res, req, 500, "Error interno al crear servicio", "Internal error while creating service");
   }
 };
 
@@ -102,7 +131,7 @@ export const listarServicios = async (req, res) => {
     const { estado, id_categoria_servicio, busqueda } = req.query;
     const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
-    let whereClause = ` WHERE 1=1 `;
+    let whereClause = " WHERE 1=1 ";
     const values = [];
     let index = 1;
 
@@ -169,7 +198,7 @@ export const listarServicios = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al listar servicios:", error);
-    return res.status(500).json({ error: "Error interno al listar servicios" });
+    return apiErrorText(res, req, 500, "Error interno al listar servicios", "Internal error while listing services");
   }
 };
 
@@ -200,13 +229,13 @@ export const obtenerServicioPorId = async (req, res) => {
     const { rows } = await pool.query(query, [id]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Servicio no encontrado" });
+      return apiErrorText(res, req, 404, "Servicio no encontrado", "Service not found");
     }
 
     return res.json(rows[0]);
   } catch (error) {
     console.error("Error al obtener servicio:", error);
-    return res.status(500).json({ error: "Error interno al obtener servicio" });
+    return apiErrorText(res, req, 500, "Error interno al obtener servicio", "Internal error while loading service");
   }
 };
 
@@ -224,15 +253,27 @@ export const actualizarServicio = async (req, res) => {
     } = req.body;
 
     if (!id_categoria_servicio) {
-      return res.status(400).json({ error: "La categoría es obligatoria" });
+      return apiErrorText(res, req, 400, "La categoría es obligatoria", "Category is required");
     }
 
     if (!nombre || !nombre.trim()) {
-      return res.status(400).json({ error: "El nombre del servicio es obligatorio" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "El nombre del servicio es obligatorio",
+        "Service name is required"
+      );
     }
 
     if (!duracion_estimada_min || Number(duracion_estimada_min) <= 0) {
-      return res.status(400).json({ error: "La duración estimada debe ser mayor a 0" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "La duración estimada debe ser mayor a 0",
+        "Estimated duration must be greater than 0"
+      );
     }
 
     const existeCategoria = await pool.query(
@@ -245,20 +286,29 @@ export const actualizarServicio = async (req, res) => {
     );
 
     if (existeCategoria.rows.length === 0) {
-      return res.status(404).json({ error: "La categoría seleccionada no existe" });
+      return apiErrorText(
+        res,
+        req,
+        404,
+        "La categoría seleccionada no existe",
+        "Selected category does not exist"
+      );
     }
 
     if (existeCategoria.rows[0].estado !== "ACTIVA") {
-      return res.status(400).json({ error: "No se puede usar una categoría inactiva" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "No se puede usar una categoría inactiva",
+        "Cannot use an inactive category"
+      );
     }
 
-    const anteriorResult = await pool.query(
-      `SELECT * FROM servicios WHERE id_servicio = $1`,
-      [id]
-    );
+    const anteriorResult = await pool.query(`SELECT * FROM servicios WHERE id_servicio = $1`, [id]);
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Servicio no encontrado" });
+      return apiErrorText(res, req, 404, "Servicio no encontrado", "Service not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -308,13 +358,17 @@ export const actualizarServicio = async (req, res) => {
     return res.json(servicio);
   } catch (error) {
     if (error.code === "23505") {
-      return res.status(409).json({
-        error: "Ya existe un servicio con ese nombre en la categoría seleccionada",
-      });
+      return apiErrorText(
+        res,
+        req,
+        409,
+        "Ya existe un servicio con ese nombre en la categoría seleccionada",
+        "A service with that name already exists in the selected category"
+      );
     }
 
     console.error("Error al actualizar servicio:", error);
-    return res.status(500).json({ error: "Error interno al actualizar servicio" });
+    return apiErrorText(res, req, 500, "Error interno al actualizar servicio", "Internal error while updating service");
   }
 };
 
@@ -324,16 +378,19 @@ export const cambiarEstadoServicio = async (req, res) => {
     const { estado } = req.body;
 
     if (!estado || !["ACTIVO", "INACTIVO"].includes(estado.toUpperCase())) {
-      return res.status(400).json({ error: "Estado inválido. Use ACTIVO o INACTIVO" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Estado inválido. Use ACTIVO o INACTIVO",
+        "Invalid status. Use ACTIVO or INACTIVO"
+      );
     }
 
-    const anteriorResult = await pool.query(
-      `SELECT * FROM servicios WHERE id_servicio = $1`,
-      [id]
-    );
+    const anteriorResult = await pool.query(`SELECT * FROM servicios WHERE id_servicio = $1`, [id]);
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Servicio no encontrado" });
+      return apiErrorText(res, req, 404, "Servicio no encontrado", "Service not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -368,6 +425,12 @@ export const cambiarEstadoServicio = async (req, res) => {
     return res.json(servicio);
   } catch (error) {
     console.error("Error al cambiar estado del servicio:", error);
-    return res.status(500).json({ error: "Error interno al cambiar estado del servicio" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al cambiar estado del servicio",
+      "Internal error while changing service status"
+    );
   }
 };

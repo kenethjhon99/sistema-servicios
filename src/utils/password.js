@@ -1,37 +1,33 @@
+import { tApi } from "../i18n/apiMessages.js";
+import { API_DEFAULT_LANG } from "./apiLocale.js";
+
 /**
- * Política de contraseñas del sistema.
+ * Password policy for the system.
  *
- * Reglas:
- *  - Mínimo 8 caracteres
- *  - Al menos una letra
- *  - Al menos un número
- *
- * Retorna { valid: true } si la contraseña cumple la política,
- * o { valid: false, error: "..." } con un mensaje claro en caso contrario.
+ * Rules:
+ *  - Minimum 8 characters
+ *  - At least one letter
+ *  - At least one number
  */
 export const PASSWORD_MIN_LENGTH = 8;
 
 /**
- * Costo de bcrypt para hashing de passwords.
- * 12 rounds ≈ 400ms en hardware moderno — buen balance entre UX y
- * resistencia a brute force offline si la BD se filtra.
- * Centralizado acá para garantizar consistencia entre crear/cambiar/reset
- * password y el dummy hash de constant-time login.
+ * Cost factor for bcrypt hashing.
  */
 export const BCRYPT_ROUNDS = 12;
 
-export const validarPassword = (password) => {
+export const validarPassword = (password, locale = API_DEFAULT_LANG) => {
   if (!password || typeof password !== "string") {
     return {
       valid: false,
-      error: "La contraseña es obligatoria",
+      error: tApi(locale, "password.required"),
     };
   }
 
   if (password.length < PASSWORD_MIN_LENGTH) {
     return {
       valid: false,
-      error: `La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`,
+      error: tApi(locale, "password.minLength", { minLength: PASSWORD_MIN_LENGTH }),
     };
   }
 
@@ -41,7 +37,7 @@ export const validarPassword = (password) => {
   if (!tieneLetra || !tieneNumero) {
     return {
       valid: false,
-      error: "La contraseña debe incluir al menos una letra y un número",
+      error: tApi(locale, "password.letterAndNumber"),
     };
   }
 

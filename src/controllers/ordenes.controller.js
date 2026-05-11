@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { apiErrorText, localizeInlineText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 import { validarUrlPublica } from "../utils/url.js";
 import { hasPublicColumn } from "../utils/schema.js";
@@ -60,7 +61,7 @@ const normalizarIdsEmpleados = (id_empleados = []) => {
   return ids.every((id) => Number.isInteger(id) && id > 0) ? ids : null;
 };
 
-const validarEmpleadosOrden = async (client, idsEmpleados, id_cuadrilla) => {
+const validarEmpleadosOrden = async (req, client, idsEmpleados, id_cuadrilla) => {
   for (const id_empleado of idsEmpleados) {
     const empleadoResult = await client.query(
       `SELECT id_empleado, id_cuadrilla, estado FROM empleados WHERE id_empleado = $1`,
@@ -68,13 +69,21 @@ const validarEmpleadosOrden = async (client, idsEmpleados, id_cuadrilla) => {
     );
 
     if (empleadoResult.rows.length === 0) {
-      return { ok: false, status: 404, error: `El tecnico ${id_empleado} no existe` };
+      return {
+        ok: false,
+        status: 404,
+        error: localizeInlineText(req, `El empleado ${id_empleado} no existe`, `Employee ${id_empleado} does not exist`),
+      };
     }
 
     const empleado = empleadoResult.rows[0];
 
     if (empleado.estado !== "ACTIVO") {
-      return { ok: false, status: 400, error: `El tecnico ${id_empleado} esta inactivo` };
+      return {
+        ok: false,
+        status: 400,
+        error: localizeInlineText(req, `El empleado ${id_empleado} esta inactivo`, `Employee ${id_empleado} is inactive`),
+      };
     }
 
     if (
@@ -85,7 +94,11 @@ const validarEmpleadosOrden = async (client, idsEmpleados, id_cuadrilla) => {
       return {
         ok: false,
         status: 400,
-        error: `El tecnico ${id_empleado} no pertenece a la cuadrilla seleccionada`,
+        error: localizeInlineText(
+          req,
+          `El empleado ${id_empleado} no pertenece al grupo seleccionado`,
+          `Employee ${id_empleado} does not belong to the selected group`
+        ),
       };
     }
   }
@@ -117,6 +130,7 @@ const sincronizarEmpleadosOrden = async (
 };
 
 const validarDisponibilidadEmpleadosOrden = async (
+  req,
   client,
   idsEmpleados,
   fecha_servicio,
@@ -142,7 +156,11 @@ const validarDisponibilidadEmpleadosOrden = async (
       return {
         ok: false,
         status: 409,
-        error: `El tecnico ${id_empleado} ya tiene asignada la orden ${conflictoResult.rows[0].numero_orden} para la fecha ${fecha_servicio}`,
+        error: localizeInlineText(
+          req,
+          `El empleado ${id_empleado} ya tiene asignada la orden ${conflictoResult.rows[0].numero_orden} para la fecha ${fecha_servicio}`,
+          `Employee ${id_empleado} is already assigned to order ${conflictoResult.rows[0].numero_orden} for ${fecha_servicio}`
+        ),
       };
     }
   }
@@ -232,28 +250,40 @@ export const crearOrdenTrabajo = async (req, res) => {
 
     if (!id_cliente) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "El cliente es obligatorio" });
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
     }
 
     if (!id_propiedad) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "La propiedad es obligatoria" });
+      return apiErrorText(res, req, 400, "La propiedad es obligatoria", "Property is required");
     }
 
     if (!fecha_servicio) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "La fecha de servicio es obligatoria" });
+      return apiErrorText(res, req, 400, "La fecha de servicio es obligatoria", "Service date is required");
     }
 
     if (!Array.isArray(detalles) || detalles.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Debe enviar al menos un detalle de servicio" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Debe enviar al menos un detalle de servicio",
+        "You must provide at least one service detail"
+      );
     }
 
     const idsEmpleados = normalizarIdsEmpleados(id_empleados);
     if (idsEmpleados === null) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "id_empleados debe ser un arreglo de IDs validos" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "id_empleados debe ser un arreglo de IDs validos",
+        "id_empleados must be an array of valid IDs"
+      );
     }
 
     const tipoVisitaFinal = (tipo_visita || "PROGRAMADA").toUpperCase();
@@ -344,13 +374,14 @@ export const crearOrdenTrabajo = async (req, res) => {
       }
     }
 
-    const empleadosValidacion = await validarEmpleadosOrden(client, idsEmpleados, id_cuadrilla);
+    const empleadosValidacion = await validarEmpleadosOrden(req, client, idsEmpleados, id_cuadrilla);
     if (!empleadosValidacion.ok) {
       await client.query("ROLLBACK");
       return res.status(empleadosValidacion.status).json({ error: empleadosValidacion.error });
     }
 
     const disponibilidadEmpleados = await validarDisponibilidadEmpleadosOrden(
+      req,
       client,
       idsEmpleados,
       fecha_servicio
@@ -617,7 +648,13 @@ export const crearOrdenTrabajo = async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("Error al crear orden de trabajo:", error);
-    return res.status(500).json({ error: "Error interno al crear orden de trabajo" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al crear orden de trabajo",
+      "Internal error while creating work order"
+    );
   } finally {
     client.release();
   }
@@ -786,7 +823,7 @@ export const obtenerOrdenTrabajoPorId = async (req, res) => {
     const ordenResult = await pool.query(ordenQuery, [id]);
 
     if (ordenResult.rows.length === 0) {
-      return res.status(404).json({ error: "Orden no encontrada" });
+      return apiErrorText(res, req, 404, "Orden no encontrada", "Order not found");
     }
 
     const detallesQuery = `
@@ -828,7 +865,7 @@ export const obtenerOrdenTrabajoPorId = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al obtener orden:", error);
-    return res.status(500).json({ error: "Error interno al obtener orden" });
+    return apiErrorText(res, req, 500, "Error interno al obtener orden", "Internal error while loading order");
   }
 };
 
@@ -864,28 +901,40 @@ export const actualizarOrdenTrabajo = async (req, res) => {
 
     if (!id_cliente) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "El cliente es obligatorio" });
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
     }
 
     if (!id_propiedad) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "La propiedad es obligatoria" });
+      return apiErrorText(res, req, 400, "La propiedad es obligatoria", "Property is required");
     }
 
     if (!fecha_servicio) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "La fecha de servicio es obligatoria" });
+      return apiErrorText(res, req, 400, "La fecha de servicio es obligatoria", "Service date is required");
     }
 
     if (!Array.isArray(detalles) || detalles.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Debe enviar al menos un detalle de servicio" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Debe enviar al menos un detalle de servicio",
+        "You must provide at least one service detail"
+      );
     }
 
     const idsEmpleados = normalizarIdsEmpleados(id_empleados);
     if (idsEmpleados === null) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "id_empleados debe ser un arreglo de IDs validos" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "id_empleados debe ser un arreglo de IDs validos",
+        "id_empleados must be an array of valid IDs"
+      );
     }
 
     const anteriorOrdenResult = await client.query(
@@ -895,7 +944,7 @@ export const actualizarOrdenTrabajo = async (req, res) => {
 
     if (anteriorOrdenResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Orden no encontrada" });
+      return apiErrorText(res, req, 404, "Orden no encontrada", "Order not found");
     }
 
     const anteriorOrden = anteriorOrdenResult.rows[0];
@@ -994,13 +1043,14 @@ export const actualizarOrdenTrabajo = async (req, res) => {
       }
     }
 
-    const empleadosValidacion = await validarEmpleadosOrden(client, idsEmpleados, id_cuadrilla);
+    const empleadosValidacion = await validarEmpleadosOrden(req, client, idsEmpleados, id_cuadrilla);
     if (!empleadosValidacion.ok) {
       await client.query("ROLLBACK");
       return res.status(empleadosValidacion.status).json({ error: empleadosValidacion.error });
     }
 
     const disponibilidadEmpleados = await validarDisponibilidadEmpleadosOrden(
+      req,
       client,
       idsEmpleados,
       fecha_servicio,
@@ -1289,7 +1339,7 @@ export const actualizarOrdenTrabajo = async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("Error al actualizar orden:", error);
-    return res.status(500).json({ error: "Error interno al actualizar orden" });
+    return apiErrorText(res, req, 500, "Error interno al actualizar orden", "Internal error while updating order");
   } finally {
     client.release();
   }
@@ -1307,13 +1357,17 @@ export const cambiarEstadoOrdenTrabajo = async (req, res) => {
 
     if (!estado || !ESTADOS_ORDEN_VALIDOS.includes(estado.toUpperCase())) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Estado inválido" });
+      return apiErrorText(res, req, 400, "Estado inválido", "Invalid status");
     }
 
     if (estado.toUpperCase() === "CANCELADA" && (!motivo_cancelacion || !motivo_cancelacion.trim())) {
       await client.query("ROLLBACK");
       return res.status(400).json({
-        error: "Debe enviar motivo de cancelación al cancelar la orden",
+        error: localizeInlineText(
+          req,
+          "Debe enviar motivo de cancelación al cancelar la orden",
+          "You must provide a cancellation reason when cancelling the order"
+        ),
       });
     }
 
@@ -1324,7 +1378,7 @@ export const cambiarEstadoOrdenTrabajo = async (req, res) => {
 
     if (anteriorResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Orden no encontrada" });
+      return apiErrorText(res, req, 404, "Orden no encontrada", "Order not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -1381,7 +1435,7 @@ export const cambiarEstadoOrdenTrabajo = async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("Error al cambiar estado de orden:", error);
-    return res.status(500).json({ error: "Error interno al cambiar estado de orden" });
+    return apiErrorText(res, req, 500, "Error interno al cambiar estado de orden", "Internal error while changing order status");
   } finally {
     client.release();
   }

@@ -1,4 +1,6 @@
 import { pool } from "../config/db.js";
+import { localizeAuditEvent, localizeAuditRows } from "../i18n/operaciones.js";
+import { resolveApiLocale } from "../utils/apiLocale.js";
 
 const ACCIONES_VALIDAS = [
   "CREAR",
@@ -35,6 +37,7 @@ const TABLAS_VALIDAS = [
 
 export const listarAuditorias = async (req, res) => {
   try {
+    const locale = resolveApiLocale(req);
     const {
       tabla_afectada,
       accion,
@@ -127,7 +130,7 @@ export const listarAuditorias = async (req, res) => {
     const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
 
     return res.json({
-      data: rows,
+      data: localizeAuditRows(rows, locale),
       pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (error) {
@@ -138,6 +141,7 @@ export const listarAuditorias = async (req, res) => {
 
 export const obtenerAuditoriaPorId = async (req, res) => {
   try {
+    const locale = resolveApiLocale(req);
     const { id } = req.params;
 
     const query = `
@@ -157,7 +161,7 @@ export const obtenerAuditoriaPorId = async (req, res) => {
       return res.status(404).json({ error: "Evento de auditoría no encontrado" });
     }
 
-    return res.json(rows[0]);
+    return res.json(localizeAuditEvent(rows[0], locale));
   } catch (error) {
     console.error("Error al obtener auditoría por id:", error);
     return res.status(500).json({ error: "Error interno al obtener auditoría" });
@@ -166,6 +170,7 @@ export const obtenerAuditoriaPorId = async (req, res) => {
 
 export const obtenerHistorialRegistro = async (req, res) => {
   try {
+    const locale = resolveApiLocale(req);
     const { tabla_afectada, id_registro } = req.params;
     const { limit, offset } = req.query;
 
@@ -203,7 +208,7 @@ export const obtenerHistorialRegistro = async (req, res) => {
       total: rows.length,
       limit: limitFinal,
       offset: offsetFinal,
-      historial: rows,
+      historial: localizeAuditRows(rows, locale),
     });
   } catch (error) {
     console.error("Error al obtener historial del registro:", error);
@@ -213,6 +218,7 @@ export const obtenerHistorialRegistro = async (req, res) => {
 
 export const obtenerAuditoriaPorUsuario = async (req, res) => {
   try {
+    const locale = resolveApiLocale(req);
     const { id_usuario } = req.params;
     const { fecha_desde, fecha_hasta, accion, limit, offset } = req.query;
 
@@ -282,7 +288,7 @@ export const obtenerAuditoriaPorUsuario = async (req, res) => {
       total: rows.length,
       limit: limitFinal,
       offset: offsetFinal,
-      eventos: rows,
+      eventos: localizeAuditRows(rows, locale),
     });
   } catch (error) {
     console.error("Error al obtener auditoría por usuario:", error);

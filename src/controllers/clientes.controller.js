@@ -1,7 +1,8 @@
 import { pool } from "../config/db.js";
+import { apiErrorText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
-import { SUPPORTED_LANGS, DEFAULT_LANG } from "../utils/idioma.js";
 import { hasPublicColumn } from "../utils/schema.js";
+import { SUPPORTED_LANGS, DEFAULT_LANG } from "../utils/idioma.js";
 
 const formatCodigoCliente = (idCliente) => `CL-${String(idCliente).padStart(6, "0")}`;
 
@@ -40,7 +41,10 @@ const normalizarCliente = (cliente) =>
 const validarTipoCliente = (tipoCliente) => {
   const tipo = tipoCliente ? tipoCliente.toUpperCase() : "HABITUAL";
   if (!["HABITUAL", "NO_HABITUAL"].includes(tipo)) {
-    return { error: "Tipo de cliente invalido" };
+    return {
+      errorEs: "Tipo de cliente invalido",
+      errorEn: "Invalid client type",
+    };
   }
   return { tipo };
 };
@@ -49,7 +53,8 @@ const validarIdiomaCliente = (idiomaPreferido) => {
   const idioma = idiomaPreferido || DEFAULT_LANG;
   if (!SUPPORTED_LANGS.includes(idioma)) {
     return {
-      error: `Idioma preferido invalido. Use: ${SUPPORTED_LANGS.join(", ")}`,
+      errorEs: `Idioma preferido invalido. Use: ${SUPPORTED_LANGS.join(", ")}`,
+      errorEn: `Invalid preferred language. Use: ${SUPPORTED_LANGS.join(", ")}`,
     };
   }
   return { idioma };
@@ -86,17 +91,23 @@ export const crearCliente = async (req, res) => {
     } = req.body;
 
     if (!nombre_completo || !nombre_completo.trim()) {
-      return res.status(400).json({ error: "El nombre completo es obligatorio" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "El nombre completo es obligatorio",
+        "Full name is required"
+      );
     }
 
-    const { tipo, error: tipoError } = validarTipoCliente(tipo_cliente);
-    if (tipoError) {
-      return res.status(400).json({ error: tipoError });
+    const { tipo, errorEs: tipoErrorEs, errorEn: tipoErrorEn } = validarTipoCliente(tipo_cliente);
+    if (tipoErrorEs) {
+      return apiErrorText(res, req, 400, tipoErrorEs, tipoErrorEn);
     }
 
-    const { idioma, error: idiomaError } = validarIdiomaCliente(idioma_preferido);
-    if (idiomaError) {
-      return res.status(400).json({ error: idiomaError });
+    const { idioma, errorEs: idiomaErrorEs, errorEn: idiomaErrorEn } = validarIdiomaCliente(idioma_preferido);
+    if (idiomaErrorEs) {
+      return apiErrorText(res, req, 400, idiomaErrorEs, idiomaErrorEn);
     }
 
     const schema = await getClienteSchemaSupport();
@@ -198,13 +209,17 @@ export const crearCliente = async (req, res) => {
     return res.status(201).json(cliente);
   } catch (error) {
     if (error.code === "23505") {
-      return res.status(409).json({
-        error: "Ya existe un cliente con ese codigo u otro dato unico",
-      });
+      return apiErrorText(
+        res,
+        req,
+        409,
+        "Ya existe un cliente con ese codigo u otro dato unico",
+        "A client with that code or another unique value already exists"
+      );
     }
 
     console.error("Error al crear cliente:", error);
-    return res.status(500).json({ error: "Error interno al crear cliente" });
+    return apiErrorText(res, req, 500, "Error interno al crear cliente", "Internal error while creating client");
   }
 };
 
@@ -264,7 +279,7 @@ export const listarClientes = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al listar clientes:", error);
-    return res.status(500).json({ error: "Error interno al listar clientes" });
+    return apiErrorText(res, req, 500, "Error interno al listar clientes", "Internal error while listing clients");
   }
 };
 
@@ -283,13 +298,13 @@ export const obtenerClientePorId = async (req, res) => {
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado" });
+      return apiErrorText(res, req, 404, "Cliente no encontrado", "Client not found");
     }
 
     return res.json(normalizarCliente(rows[0]));
   } catch (error) {
     console.error("Error al obtener cliente:", error);
-    return res.status(500).json({ error: "Error interno al obtener cliente" });
+    return apiErrorText(res, req, 500, "Error interno al obtener cliente", "Internal error while loading client");
   }
 };
 
@@ -313,26 +328,29 @@ export const actualizarCliente = async (req, res) => {
     } = req.body;
 
     if (!nombre_completo || !nombre_completo.trim()) {
-      return res.status(400).json({ error: "El nombre completo es obligatorio" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "El nombre completo es obligatorio",
+        "Full name is required"
+      );
     }
 
-    const { tipo, error: tipoError } = validarTipoCliente(tipo_cliente);
-    if (tipoError) {
-      return res.status(400).json({ error: tipoError });
+    const { tipo, errorEs: tipoErrorEs, errorEn: tipoErrorEn } = validarTipoCliente(tipo_cliente);
+    if (tipoErrorEs) {
+      return apiErrorText(res, req, 400, tipoErrorEs, tipoErrorEn);
     }
 
-    const { idioma, error: idiomaError } = validarIdiomaCliente(idioma_preferido);
-    if (idiomaError) {
-      return res.status(400).json({ error: idiomaError });
+    const { idioma, errorEs: idiomaErrorEs, errorEn: idiomaErrorEn } = validarIdiomaCliente(idioma_preferido);
+    if (idiomaErrorEs) {
+      return apiErrorText(res, req, 400, idiomaErrorEs, idiomaErrorEn);
     }
 
-    const anteriorResult = await pool.query(
-      `SELECT * FROM clientes WHERE id_cliente = $1`,
-      [id]
-    );
+    const anteriorResult = await pool.query(`SELECT * FROM clientes WHERE id_cliente = $1`, [id]);
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado" });
+      return apiErrorText(res, req, 404, "Cliente no encontrado", "Client not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -396,13 +414,17 @@ export const actualizarCliente = async (req, res) => {
     return res.json(cliente);
   } catch (error) {
     if (error.code === "23505") {
-      return res.status(409).json({
-        error: "Ya existe un cliente con ese codigo u otro dato unico",
-      });
+      return apiErrorText(
+        res,
+        req,
+        409,
+        "Ya existe un cliente con ese codigo u otro dato unico",
+        "A client with that code or another unique value already exists"
+      );
     }
 
     console.error("Error al actualizar cliente:", error);
-    return res.status(500).json({ error: "Error interno al actualizar cliente" });
+    return apiErrorText(res, req, 500, "Error interno al actualizar cliente", "Internal error while updating client");
   }
 };
 
@@ -412,16 +434,19 @@ export const cambiarEstadoCliente = async (req, res) => {
     const { estado } = req.body;
 
     if (!estado || !["ACTIVO", "INACTIVO"].includes(estado.toUpperCase())) {
-      return res.status(400).json({ error: "Estado invalido. Use ACTIVO o INACTIVO" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Estado invalido. Use ACTIVO o INACTIVO",
+        "Invalid status. Use ACTIVO or INACTIVO"
+      );
     }
 
-    const anteriorResult = await pool.query(
-      `SELECT * FROM clientes WHERE id_cliente = $1`,
-      [id]
-    );
+    const anteriorResult = await pool.query(`SELECT * FROM clientes WHERE id_cliente = $1`, [id]);
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado" });
+      return apiErrorText(res, req, 404, "Cliente no encontrado", "Client not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -461,6 +486,12 @@ export const cambiarEstadoCliente = async (req, res) => {
     return res.json(cliente);
   } catch (error) {
     console.error("Error al cambiar estado del cliente:", error);
-    return res.status(500).json({ error: "Error interno al cambiar estado del cliente" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al cambiar estado del cliente",
+      "Internal error while changing client status"
+    );
   }
 };

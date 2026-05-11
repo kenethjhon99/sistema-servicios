@@ -1,22 +1,22 @@
-import { verifyToken } from "../utils/jwt.js";
 import { pool } from "../config/db.js";
+import { apiError } from "../i18n/apiMessages.js";
+import { verifyToken } from "../utils/jwt.js";
 
 export const authRequired = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader) {
-      return res.status(401).json({ error: "Sin token de autorización" });
+      return apiError(res, req, 401, "auth.missingToken");
     }
 
     const parts = authHeader.split(" ");
 
     if (parts.length !== 2 || parts[0] !== "Bearer") {
-      return res.status(401).json({ error: "Formato de token inválido. Use Bearer TOKEN" });
+      return apiError(res, req, 401, "auth.invalidTokenFormat");
     }
 
     const token = parts[1];
-
     const decoded = verifyToken(token);
 
     const userResult = await pool.query(
@@ -29,33 +29,31 @@ export const authRequired = async (req, res, next) => {
     );
 
     if (userResult.rows.length === 0) {
-      return res.status(401).json({ error: "Usuario del token no encontrado" });
+      return apiError(res, req, 401, "auth.tokenUserNotFound");
     }
 
     const usuario = userResult.rows[0];
 
     if (usuario.estado !== "ACTIVO") {
-      return res.status(403).json({ error: "Usuario inactivo" });
+      return apiError(res, req, 403, "auth.userInactive");
     }
 
     req.user = usuario;
     next();
   } catch (error) {
     console.error("Error en authRequired:", error);
-    return res.status(401).json({ error: "Token inválido o expirado" });
+    return apiError(res, req, 401, "auth.invalidOrExpiredToken");
   }
 };
 
 export const requireRole = (...rolesPermitidos) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ error: "Usuario no autenticado" });
+      return apiError(res, req, 401, "auth.notAuthenticated");
     }
 
     if (!rolesPermitidos.includes(req.user.rol)) {
-      return res.status(403).json({
-        error: "No tienes permisos para realizar esta acción",
-      });
+      return apiError(res, req, 403, "auth.forbidden");
     }
 
     next();

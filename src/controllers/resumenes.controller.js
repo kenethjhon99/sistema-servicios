@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { apiErrorText } from "../i18n/apiMessages.js";
 import { hasPublicColumn } from "../utils/schema.js";
 
 const resolveClienteDocumentColumn = async () =>
@@ -25,7 +26,7 @@ export const obtenerResumenFinancieroOrden = async (req, res) => {
     const ordenResult = await pool.query(ordenQuery, [id_orden_trabajo]);
 
     if (ordenResult.rows.length === 0) {
-      return res.status(404).json({ error: "Orden no encontrada" });
+      return apiErrorText(res, req, 404, "Orden no encontrada", "Order not found");
     }
 
     const detallesQuery = `
@@ -138,7 +139,13 @@ export const obtenerResumenFinancieroOrden = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al obtener resumen financiero de la orden:", error);
-    return res.status(500).json({ error: "Error interno al obtener resumen financiero de la orden" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al obtener resumen financiero de la orden",
+      "Internal error while loading the order financial summary"
+    );
   }
 };
 
@@ -156,7 +163,7 @@ export const obtenerPerfilCompletoCliente = async (req, res) => {
     const clienteResult = await pool.query(clienteQuery, [id_cliente]);
 
     if (clienteResult.rows.length === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado" });
+      return apiErrorText(res, req, 404, "Cliente no encontrado", "Client not found");
     }
 
     const propiedadesQuery = `
@@ -283,6 +290,12 @@ export const obtenerPerfilCompletoCliente = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al obtener perfil completo del cliente:", error);
-    return res.status(500).json({ error: "Error interno al obtener perfil completo del cliente" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al obtener perfil completo del cliente",
+      "Internal error while loading the full client profile"
+    );
   }
 };

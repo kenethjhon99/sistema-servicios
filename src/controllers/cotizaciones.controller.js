@@ -18,6 +18,7 @@
  *    eso queda en routes con requireRole.
  */
 import { pool } from "../config/db.js";
+import { apiErrorText, localizeInlineText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 import { hasPublicColumn } from "../utils/schema.js";
 
@@ -71,7 +72,7 @@ const normalizarIdsEmpleados = (id_empleados = []) => {
   return ids.every((id) => Number.isInteger(id) && id > 0) ? ids : null;
 };
 
-const validarEmpleadosOrden = async (client, idsEmpleados, id_cuadrilla) => {
+const validarEmpleadosOrden = async (req, client, idsEmpleados, id_cuadrilla) => {
   for (const id_empleado of idsEmpleados) {
     const empleadoResult = await client.query(
       `SELECT id_empleado, id_cuadrilla, estado FROM empleados WHERE id_empleado = $1`,
@@ -79,13 +80,21 @@ const validarEmpleadosOrden = async (client, idsEmpleados, id_cuadrilla) => {
     );
 
     if (empleadoResult.rows.length === 0) {
-      return { ok: false, status: 404, error: `El tecnico ${id_empleado} no existe` };
+      return {
+        ok: false,
+        status: 404,
+        error: localizeInlineText(req, `El empleado ${id_empleado} no existe`, `Employee ${id_empleado} does not exist`),
+      };
     }
 
     const empleado = empleadoResult.rows[0];
 
     if (empleado.estado !== "ACTIVO") {
-      return { ok: false, status: 400, error: `El tecnico ${id_empleado} esta inactivo` };
+      return {
+        ok: false,
+        status: 400,
+        error: localizeInlineText(req, `El empleado ${id_empleado} esta inactivo`, `Employee ${id_empleado} is inactive`),
+      };
     }
 
     if (
@@ -96,7 +105,11 @@ const validarEmpleadosOrden = async (client, idsEmpleados, id_cuadrilla) => {
       return {
         ok: false,
         status: 400,
-        error: `El tecnico ${id_empleado} no pertenece a la cuadrilla seleccionada`,
+        error: localizeInlineText(
+          req,
+          `El empleado ${id_empleado} no pertenece al grupo seleccionado`,
+          `Employee ${id_empleado} does not belong to the selected group`
+        ),
       };
     }
   }
@@ -117,7 +130,7 @@ const sincronizarEmpleadosOrden = async (client, id_orden_trabajo, idsEmpleados)
   }
 };
 
-const validarDisponibilidadEmpleadosOrden = async (client, idsEmpleados, fecha_servicio) => {
+const validarDisponibilidadEmpleadosOrden = async (req, client, idsEmpleados, fecha_servicio) => {
   for (const id_empleado of idsEmpleados) {
     const conflictoResult = await client.query(
       `
@@ -137,7 +150,11 @@ const validarDisponibilidadEmpleadosOrden = async (client, idsEmpleados, fecha_s
       return {
         ok: false,
         status: 409,
-        error: `El tecnico ${id_empleado} ya tiene asignada la orden ${conflictoResult.rows[0].numero_orden} para la fecha ${fecha_servicio}`,
+        error: localizeInlineText(
+          req,
+          `El empleado ${id_empleado} ya tiene asignada la orden ${conflictoResult.rows[0].numero_orden} para la fecha ${fecha_servicio}`,
+          `Employee ${id_empleado} is already assigned to order ${conflictoResult.rows[0].numero_orden} for ${fecha_servicio}`
+        ),
       };
     }
   }
@@ -194,14 +211,14 @@ export const crearCotizacion = async (req, res) => {
 
     if (!id_cliente) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "El cliente es obligatorio" });
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
     }
 
     if (!Array.isArray(detalles) || detalles.length === 0) {
       await client.query("ROLLBACK");
       return res
         .status(400)
-        .json({ error: "Debe enviar al menos un detalle de cotización" });
+        .json({ error: localizeInlineText(req, "Debe enviar al menos un detalle de cotización", "You must provide at least one quote detail") });
     }
 
     const descuentoFinal =
@@ -390,7 +407,7 @@ export const crearCotizacion = async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("Error al crear cotización:", error);
-    return res.status(500).json({ error: "Error interno al crear cotización" });
+    return apiErrorText(res, req, 500, "Error interno al crear cotización", "Internal error while creating quote");
   } finally {
     client.release();
   }
@@ -416,7 +433,7 @@ export const listarCotizaciones = async (req, res) => {
     if (estado) {
       const estadoUpper = normalizarEstadoCotizacion(estado);
       if (!ESTADOS_VALIDOS.includes(estadoUpper)) {
-        return res.status(400).json({ error: "Estado inválido" });
+        return apiErrorText(res, req, 400, "Estado inválido", "Invalid status");
       }
       whereClause += ` AND co.estado = $${index}`;
       values.push(estadoUpper);
@@ -479,7 +496,7 @@ export const listarCotizaciones = async (req, res) => {
     console.error("Error al listar cotizaciones:", error);
     return res
       .status(500)
-      .json({ error: "Error interno al listar cotizaciones" });
+      .json({ error: localizeInlineText(req, "Error interno al listar cotizaciones", "Internal error while listing quotes") });
   }
 };
 
@@ -508,7 +525,7 @@ export const obtenerCotizacionPorId = async (req, res) => {
     );
 
     if (cotResult.rows.length === 0) {
-      return res.status(404).json({ error: "Cotización no encontrada" });
+      return apiErrorText(res, req, 404, "Cotización no encontrada", "Quote not found");
     }
 
     const detallesResult = await pool.query(
@@ -530,7 +547,7 @@ export const obtenerCotizacionPorId = async (req, res) => {
     console.error("Error al obtener cotización:", error);
     return res
       .status(500)
-      .json({ error: "Error interno al obtener cotización" });
+      .json({ error: localizeInlineText(req, "Error interno al obtener cotización", "Internal error while loading quote") });
   }
 };
 
@@ -559,7 +576,7 @@ export const actualizarCotizacion = async (req, res) => {
     );
     if (anteriorResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Cotización no encontrada" });
+      return apiErrorText(res, req, 404, "Cotización no encontrada", "Quote not found");
     }
     const anterior = anteriorResult.rows[0];
 
@@ -747,7 +764,7 @@ export const actualizarCotizacion = async (req, res) => {
     console.error("Error al actualizar cotización:", error);
     return res
       .status(500)
-      .json({ error: "Error interno al actualizar cotización" });
+      .json({ error: localizeInlineText(req, "Error interno al actualizar cotización", "Internal error while updating quote") });
   } finally {
     client.release();
   }
@@ -776,7 +793,7 @@ export const cambiarEstadoCotizacion = async (req, res) => {
     if (estadoNuevo === "CONVERTIDA") {
       await client.query("ROLLBACK");
       return res.status(400).json({
-        error: "Para convertir usá POST /api/cotizaciones/:id/convertir",
+        error: localizeInlineText(req, "Para convertir usa POST /api/cotizaciones/:id/convertir", "To convert, use POST /api/cotizaciones/:id/convertir"),
       });
     }
 
@@ -786,7 +803,7 @@ export const cambiarEstadoCotizacion = async (req, res) => {
     );
     if (anteriorResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Cotización no encontrada" });
+      return apiErrorText(res, req, 404, "Cotización no encontrada", "Quote not found");
     }
     const anterior = anteriorResult.rows[0];
 
@@ -859,7 +876,7 @@ export const cambiarEstadoCotizacion = async (req, res) => {
     console.error("Error al cambiar estado de cotización:", error);
     return res
       .status(500)
-      .json({ error: "Error interno al cambiar estado" });
+      .json({ error: localizeInlineText(req, "Error interno al cambiar estado", "Internal error while changing status") });
   } finally {
     client.release();
   }
@@ -881,13 +898,13 @@ export const convertirCotizacionAOrden = async (req, res) => {
       await client.query("ROLLBACK");
       return res
         .status(400)
-        .json({ error: "fecha_servicio es obligatoria para crear la orden" });
+        .json({ error: localizeInlineText(req, "fecha_servicio es obligatoria para crear la orden", "fecha_servicio is required to create the order") });
     }
 
     const idsEmpleados = normalizarIdsEmpleados(id_empleados);
     if (idsEmpleados === null) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "id_empleados debe ser un arreglo de IDs validos" });
+      return apiErrorText(res, req, 400, "id_empleados debe ser un arreglo de IDs validos", "id_empleados must be an array of valid IDs");
     }
 
     // Lock de la cotización
@@ -897,7 +914,7 @@ export const convertirCotizacionAOrden = async (req, res) => {
     );
     if (cotResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "Cotización no encontrada" });
+      return apiErrorText(res, req, 404, "Cotización no encontrada", "Quote not found");
     }
     const cotizacion = cotResult.rows[0];
 
@@ -932,13 +949,14 @@ export const convertirCotizacionAOrden = async (req, res) => {
       }
     }
 
-    const empleadosValidacion = await validarEmpleadosOrden(client, idsEmpleados, id_cuadrilla);
+    const empleadosValidacion = await validarEmpleadosOrden(req, client, idsEmpleados, id_cuadrilla);
     if (!empleadosValidacion.ok) {
       await client.query("ROLLBACK");
       return res.status(empleadosValidacion.status).json({ error: empleadosValidacion.error });
     }
 
     const disponibilidadEmpleados = await validarDisponibilidadEmpleadosOrden(
+      req,
       client,
       idsEmpleados,
       fecha_servicio
@@ -1088,7 +1106,7 @@ export const convertirCotizacionAOrden = async (req, res) => {
     console.error("Error al convertir cotización:", error);
     return res
       .status(500)
-      .json({ error: "Error interno al convertir cotización" });
+      .json({ error: localizeInlineText(req, "Error interno al convertir cotización", "Internal error while converting quote") });
   } finally {
     client.release();
   }

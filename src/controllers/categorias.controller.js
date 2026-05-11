@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { apiErrorText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 
 const ESTADOS_VALIDOS = ["ACTIVA", "INACTIVA"];
@@ -8,7 +9,7 @@ export const crearCategoria = async (req, res) => {
     const { nombre, descripcion } = req.body;
 
     if (!nombre || !nombre.trim()) {
-      return res.status(400).json({ error: "El nombre es obligatorio" });
+      return apiErrorText(res, req, 400, "El nombre es obligatorio", "Name is required");
     }
 
     const query = `
@@ -44,11 +45,17 @@ export const crearCategoria = async (req, res) => {
     return res.status(201).json(categoria);
   } catch (error) {
     if (error.code === "23505") {
-      return res.status(409).json({ error: "Ya existe una categoría con ese nombre" });
+      return apiErrorText(
+        res,
+        req,
+        409,
+        "Ya existe una categoría con ese nombre",
+        "A category with that name already exists"
+      );
     }
 
     console.error("Error al crear categoría:", error);
-    return res.status(500).json({ error: "Error interno al crear categoría" });
+    return apiErrorText(res, req, 500, "Error interno al crear categoría", "Internal error while creating category");
   }
 };
 
@@ -67,13 +74,13 @@ export const listarCategorias = async (req, res) => {
       values.push(estado.toUpperCase());
     }
 
-    query += ` ORDER BY id_categoria_servicio DESC`;
+    query += " ORDER BY id_categoria_servicio DESC";
 
     const { rows } = await pool.query(query, values);
     return res.json(rows);
   } catch (error) {
     console.error("Error al listar categorías:", error);
-    return res.status(500).json({ error: "Error interno al listar categorías" });
+    return apiErrorText(res, req, 500, "Error interno al listar categorías", "Internal error while listing categories");
   }
 };
 
@@ -90,13 +97,13 @@ export const obtenerCategoriaPorId = async (req, res) => {
     const { rows } = await pool.query(query, [id]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Categoría no encontrada" });
+      return apiErrorText(res, req, 404, "Categoría no encontrada", "Category not found");
     }
 
     return res.json(rows[0]);
   } catch (error) {
     console.error("Error al obtener categoría:", error);
-    return res.status(500).json({ error: "Error interno al obtener categoría" });
+    return apiErrorText(res, req, 500, "Error interno al obtener categoría", "Internal error while loading category");
   }
 };
 
@@ -106,7 +113,7 @@ export const actualizarCategoria = async (req, res) => {
     const { nombre, descripcion } = req.body;
 
     if (!nombre || !nombre.trim()) {
-      return res.status(400).json({ error: "El nombre es obligatorio" });
+      return apiErrorText(res, req, 400, "El nombre es obligatorio", "Name is required");
     }
 
     const anteriorResult = await pool.query(
@@ -115,7 +122,7 @@ export const actualizarCategoria = async (req, res) => {
     );
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Categoría no encontrada" });
+      return apiErrorText(res, req, 404, "Categoría no encontrada", "Category not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -153,11 +160,17 @@ export const actualizarCategoria = async (req, res) => {
     return res.json(categoria);
   } catch (error) {
     if (error.code === "23505") {
-      return res.status(409).json({ error: "Ya existe una categoría con ese nombre" });
+      return apiErrorText(
+        res,
+        req,
+        409,
+        "Ya existe una categoría con ese nombre",
+        "A category with that name already exists"
+      );
     }
 
     console.error("Error al actualizar categoría:", error);
-    return res.status(500).json({ error: "Error interno al actualizar categoría" });
+    return apiErrorText(res, req, 500, "Error interno al actualizar categoría", "Internal error while updating category");
   }
 };
 
@@ -167,7 +180,13 @@ export const cambiarEstadoCategoria = async (req, res) => {
     const { estado } = req.body;
 
     if (!estado || !ESTADOS_VALIDOS.includes(estado.toUpperCase())) {
-      return res.status(400).json({ error: "Estado inválido. Use ACTIVA o INACTIVA" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Estado inválido. Use ACTIVA o INACTIVA",
+        "Invalid status. Use ACTIVA or INACTIVA"
+      );
     }
 
     const anteriorResult = await pool.query(
@@ -176,7 +195,7 @@ export const cambiarEstadoCategoria = async (req, res) => {
     );
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Categoría no encontrada" });
+      return apiErrorText(res, req, 404, "Categoría no encontrada", "Category not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -211,6 +230,12 @@ export const cambiarEstadoCategoria = async (req, res) => {
     return res.json(categoria);
   } catch (error) {
     console.error("Error al cambiar estado de categoría:", error);
-    return res.status(500).json({ error: "Error interno al cambiar estado de categoría" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al cambiar estado de categoría",
+      "Internal error while changing category status"
+    );
   }
 };

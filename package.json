@@ -15,7 +15,8 @@
     "test:coverage": "vitest run --coverage",
     "db:migrate": "node src/db/migrate.js up",
     "db:status": "node src/db/migrate.js status",
-    "admin:hash": "node scripts/hash-password.js"
+    "admin:hash": "node scripts/hash-password.js",
+    "seed:admin": "node scripts/seed-admin.js"
   },
   "keywords": [],
   "author": "",

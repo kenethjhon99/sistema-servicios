@@ -1,4 +1,6 @@
 import { pool } from "../config/db.js";
+import { localizeAlerts } from "../i18n/operaciones.js";
+import { resolveApiLocale } from "../utils/apiLocale.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 
 const TIPOS_ALERTA = [
@@ -11,6 +13,7 @@ const TIPOS_ALERTA = [
 ];
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_DASHBOARD_RANGE_DAYS = 92;
+const formatCurrencyLabel = (value) => `$${Number(value || 0).toFixed(2)}`;
 
 const toIsoDate = (date) => {
   const year = date.getFullYear();
@@ -257,7 +260,7 @@ export const generarAlertas = async (req, res) => {
           [
             "PAGO_HOY",
             "Crédito vence hoy",
-            `${item.nombre_completo} - Orden ${item.numero_orden} - Saldo Q${item.saldo_pendiente}`,
+            `${item.nombre_completo} - Orden ${item.numero_orden} - Saldo ${formatCurrencyLabel(item.saldo_pendiente)}`,
             "CREDITO",
             item.id_credito,
           ]
@@ -305,7 +308,7 @@ export const generarAlertas = async (req, res) => {
           [
             "PAGO_MANANA",
             "Crédito vence mañana",
-            `${item.nombre_completo} - Orden ${item.numero_orden} - Saldo Q${item.saldo_pendiente}`,
+            `${item.nombre_completo} - Orden ${item.numero_orden} - Saldo ${formatCurrencyLabel(item.saldo_pendiente)}`,
             "CREDITO",
             item.id_credito,
           ]
@@ -354,7 +357,7 @@ export const generarAlertas = async (req, res) => {
           [
             "PAGO_VENCIDO",
             "Crédito vencido",
-            `${item.nombre_completo} - Orden ${item.numero_orden} - Venció ${item.fecha_vencimiento} - Saldo Q${item.saldo_pendiente}`,
+            `${item.nombre_completo} - Orden ${item.numero_orden} - Venció ${item.fecha_vencimiento} - Saldo ${formatCurrencyLabel(item.saldo_pendiente)}`,
             "CREDITO",
             item.id_credito,
           ]
@@ -422,6 +425,7 @@ export const generarAlertas = async (req, res) => {
 
 export const listarAlertas = async (req, res) => {
   try {
+    const locale = resolveApiLocale(req);
     const { leida, tipo_alerta, modulo_origen, fecha_desde, fecha_hasta } = req.query;
     const { page, limit, offset } = req.pagination || { page: 1, limit: 50, offset: 0 };
 
@@ -480,7 +484,7 @@ export const listarAlertas = async (req, res) => {
     const { rows } = await pool.query(dataQuery, [...values, limit, offset]);
 
     return res.json({
-      data: rows,
+      data: localizeAlerts(rows, locale),
       pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (error) {
@@ -574,6 +578,7 @@ export const eliminarAlerta = async (req, res) => {
 
 export const obtenerDashboardBase = async (_req, res) => {
   try {
+    const locale = resolveApiLocale(_req);
     const range = resolveDashboardRange(_req.query || {});
 
     if (range.error) {
@@ -731,7 +736,7 @@ export const obtenerDashboardBase = async (_req, res) => {
       },
       serie_diaria: serieDiaria.rows,
       totales_periodo: totalesPeriodo,
-      ultimas_alertas: ultimasAlertas.rows,
+      ultimas_alertas: localizeAlerts(ultimasAlertas.rows, locale),
     });
   } catch (error) {
     console.error("Error al obtener dashboard base:", error);

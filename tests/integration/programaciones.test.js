@@ -67,7 +67,7 @@ describe("Programaciones - tecnico responsable", () => {
     });
   });
 
-  it("rechaza tecnico responsable de otra cuadrilla", async () => {
+  it("rechaza responsable asignado de otro grupo", async () => {
     const auth = primeAuth(poolMock, makeUsuario({ rol: "SUPERVISOR" }));
 
     poolMock.query
@@ -96,7 +96,7 @@ describe("Programaciones - tecnico responsable", () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/no pertenece a la cuadrilla/i);
+    expect(res.body.error).toMatch(/no pertenece al grupo seleccionado/i);
   });
 
   it("rechaza tecnico responsable con sobreasignacion en la misma fecha", async () => {

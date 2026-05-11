@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { apiErrorText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 
 const METODOS_PAGO_VALIDOS = [
@@ -16,6 +17,7 @@ const ESTADOS_CREDITO_VALIDOS = [
   "VENCIDO",
   "CANCELADO",
 ];
+const formatCurrencyLabel = (value) => `$${Number(value || 0).toFixed(2)}`;
 
 const recalcularEstadoCredito = (montoTotal, montoPagado, fechaVencimiento) => {
   const total = Number(montoTotal);
@@ -42,15 +44,15 @@ export const crearPago = async (req, res) => {
     } = req.body;
 
     if (!id_cliente) {
-      return res.status(400).json({ error: "El cliente es obligatorio" });
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
     }
 
     if (!metodo_pago || !METODOS_PAGO_VALIDOS.includes(metodo_pago.toUpperCase())) {
-      return res.status(400).json({ error: "Método de pago inválido" });
+      return apiErrorText(res, req, 400, "Método de pago inválido", "Invalid payment method");
     }
 
     if (monto === undefined || monto === null || Number(monto) <= 0) {
-      return res.status(400).json({ error: "El monto debe ser mayor a 0" });
+      return apiErrorText(res, req, 400, "El monto debe ser mayor a 0", "Amount must be greater than 0");
     }
 
     const clienteResult = await pool.query(
@@ -116,7 +118,7 @@ export const crearPago = async (req, res) => {
       tabla_afectada: "pagos",
       id_registro: pago.id_pago,
       accion: "PAGO",
-      descripcion: `Se registró un pago por Q${pago.monto}`,
+      descripcion: `Se registró un pago por ${formatCurrencyLabel(pago.monto)}`,
       valores_nuevos: pago,
       realizado_por: registradoPor,
     });
@@ -124,7 +126,7 @@ export const crearPago = async (req, res) => {
     return res.status(201).json(pago);
   } catch (error) {
     console.error("Error al crear pago:", error);
-    return res.status(500).json({ error: "Error interno al crear pago" });
+    return apiErrorText(res, req, 500, "Error interno al crear pago", "Internal error while creating payment");
   }
 };
 
@@ -206,7 +208,7 @@ export const listarPagos = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al listar pagos:", error);
-    return res.status(500).json({ error: "Error interno al listar pagos" });
+    return apiErrorText(res, req, 500, "Error interno al listar pagos", "Internal error while listing payments");
   }
 };
 
@@ -233,13 +235,13 @@ export const obtenerPagoPorId = async (req, res) => {
     const { rows } = await pool.query(query, [id]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Pago no encontrado" });
+      return apiErrorText(res, req, 404, "Pago no encontrado", "Payment not found");
     }
 
     return res.json(rows[0]);
   } catch (error) {
     console.error("Error al obtener pago:", error);
-    return res.status(500).json({ error: "Error interno al obtener pago" });
+    return apiErrorText(res, req, 500, "Error interno al obtener pago", "Internal error while loading payment");
   }
 };
 
@@ -257,11 +259,11 @@ export const crearCredito = async (req, res) => {
     } = req.body;
 
     if (!id_cliente) {
-      return res.status(400).json({ error: "El cliente es obligatorio" });
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
     }
 
     if (!id_orden_trabajo) {
-      return res.status(400).json({ error: "La orden de trabajo es obligatoria" });
+      return apiErrorText(res, req, 400, "La orden de trabajo es obligatoria", "Work order is required");
     }
 
     if (monto_total === undefined || monto_total === null || Number(monto_total) < 0) {
@@ -364,7 +366,7 @@ export const crearCredito = async (req, res) => {
     return res.status(201).json(credito);
   } catch (error) {
     console.error("Error al crear crédito:", error);
-    return res.status(500).json({ error: "Error interno al crear crédito" });
+    return apiErrorText(res, req, 500, "Error interno al crear crédito", "Internal error while creating credit");
   }
 };
 
@@ -442,7 +444,7 @@ export const listarCreditos = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al listar créditos:", error);
-    return res.status(500).json({ error: "Error interno al listar créditos" });
+    return apiErrorText(res, req, 500, "Error interno al listar créditos", "Internal error while listing credits");
   }
 };
 
@@ -466,7 +468,7 @@ export const obtenerCreditoPorId = async (req, res) => {
     const creditoResult = await pool.query(creditoQuery, [id]);
 
     if (creditoResult.rows.length === 0) {
-      return res.status(404).json({ error: "Crédito no encontrado" });
+      return apiErrorText(res, req, 404, "Crédito no encontrado", "Credit not found");
     }
 
     const pagosQuery = `
@@ -502,7 +504,7 @@ export const cambiarEstadoCredito = async (req, res) => {
     const { estado } = req.body;
 
     if (!estado || !ESTADOS_CREDITO_VALIDOS.includes(estado.toUpperCase())) {
-      return res.status(400).json({ error: "Estado de crédito inválido" });
+      return apiErrorText(res, req, 400, "Estado de crédito inválido", "Invalid credit status");
     }
 
     const anteriorResult = await pool.query(
@@ -511,7 +513,7 @@ export const cambiarEstadoCredito = async (req, res) => {
     );
 
     if (anteriorResult.rows.length === 0) {
-      return res.status(404).json({ error: "Crédito no encontrado" });
+      return apiErrorText(res, req, 404, "Crédito no encontrado", "Credit not found");
     }
 
     const anterior = anteriorResult.rows[0];
@@ -535,7 +537,7 @@ export const cambiarEstadoCredito = async (req, res) => {
     ]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Crédito no encontrado" });
+      return apiErrorText(res, req, 404, "Crédito no encontrado", "Credit not found");
     }
 
     const credito = rows[0];
@@ -576,17 +578,17 @@ export const aplicarPagoACredito = async (req, res) => {
 
     if (!id_credito) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "El crédito es obligatorio" });
+      return apiErrorText(res, req, 400, "El crédito es obligatorio", "Credit is required");
     }
 
     if (!metodo_pago || !METODOS_PAGO_VALIDOS.includes(metodo_pago.toUpperCase())) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "Método de pago inválido" });
+      return apiErrorText(res, req, 400, "Método de pago inválido", "Invalid payment method");
     }
 
     if (monto === undefined || monto === null || Number(monto) <= 0) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: "El monto debe ser mayor a 0" });
+      return apiErrorText(res, req, 400, "El monto debe ser mayor a 0", "Amount must be greater than 0");
     }
 
     // FOR UPDATE bloquea la fila hasta el COMMIT. Sin esto, dos abonos
@@ -662,7 +664,7 @@ export const aplicarPagoACredito = async (req, res) => {
       tabla_afectada: "pagos",
       id_registro: pago.id_pago,
       accion: "PAGO",
-      descripcion: `Se registró un pago aplicado a crédito por Q${pago.monto}`,
+      descripcion: `Se registró un pago aplicado a crédito por ${formatCurrencyLabel(pago.monto)}`,
       valores_nuevos: pago,
       realizado_por: registradoPor,
     });
@@ -709,7 +711,7 @@ export const aplicarPagoACredito = async (req, res) => {
       tabla_afectada: "creditos",
       id_registro: creditoActualizado.id_credito,
       accion: "ABONO",
-      descripcion: `Se aplicó un abono de Q${montoFinal} al crédito ${creditoActualizado.id_credito}`,
+      descripcion: `Se aplicó un abono de ${formatCurrencyLabel(montoFinal)} al crédito ${creditoActualizado.id_credito}`,
       valores_anteriores: credito,
       valores_nuevos: creditoActualizado,
       realizado_por: registradoPor,
@@ -725,7 +727,7 @@ export const aplicarPagoACredito = async (req, res) => {
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("Error al aplicar pago a crédito:", error);
-    return res.status(500).json({ error: "Error interno al aplicar pago a crédito" });
+    return apiErrorText(res, req, 500, "Error interno al aplicar pago a crédito", "Internal error while applying payment to credit");
   } finally {
     client.release();
   }

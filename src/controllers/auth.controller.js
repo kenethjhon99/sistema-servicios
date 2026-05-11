@@ -1,15 +1,11 @@
 import bcrypt from "bcrypt";
 import { pool } from "../config/db.js";
+import { apiError, apiMessage } from "../i18n/apiMessages.js";
 import { createToken } from "../utils/jwt.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
 
-// Hash dummy de bcrypt con los mismos costos (BCRYPT_ROUNDS=12) que un
-// usuario real. Se usa para gastar el mismo tiempo en bcrypt.compare cuando
-// el usuario del login NO existe — así un atacante no puede enumerar usuarios
-// válidos midiendo el tiempo de respuesta.
-//
-// IMPORTANTE: si cambia BCRYPT_ROUNDS en utils/password.js, regenerar este
-// hash con: node -e "import('bcrypt').then(b => b.default.hash('x', 12).then(console.log))"
+// Dummy bcrypt hash with the same cost factor as real users to avoid
+// user enumeration by response timing.
 const DUMMY_BCRYPT_HASH = "$2b$12$PT0fnocNWS9QmPk7GnexaenKUXPhn9vBV8OorEf4SFUBqWRCyGB2y";
 
 export const loginUsuario = async (req, res) => {
@@ -17,11 +13,11 @@ export const loginUsuario = async (req, res) => {
     const { username, password } = req.body;
 
     if (!username || !username.trim()) {
-      return res.status(400).json({ error: "El username es obligatorio" });
+      return apiError(res, req, 400, "auth.usernameRequired");
     }
 
     if (!password) {
-      return res.status(400).json({ error: "La contraseña es obligatoria" });
+      return apiError(res, req, 400, "auth.passwordRequired");
     }
 
     const query = `
@@ -33,25 +29,21 @@ export const loginUsuario = async (req, res) => {
     const { rows } = await pool.query(query, [username.trim()]);
 
     if (rows.length === 0) {
-      // Compare contra hash dummy para gastar el mismo tiempo y no
-      // filtrar "el usuario no existe" vía timing.
       await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
-      return res.status(401).json({ error: "Credenciales inválidas" });
+      return apiError(res, req, 401, "auth.invalidCredentials");
     }
 
     const usuario = rows[0];
 
     if (usuario.estado !== "ACTIVO") {
-      // Compare aquí también — un atacante podría distinguir
-      // "existe pero inactivo" vs "no existe" si saltamos bcrypt.
       await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
-      return res.status(403).json({ error: "Usuario inactivo" });
+      return apiError(res, req, 403, "auth.userInactive");
     }
 
     const passwordOk = await bcrypt.compare(password, usuario.password_hash);
 
     if (!passwordOk) {
-      return res.status(401).json({ error: "Credenciales inválidas" });
+      return apiError(res, req, 401, "auth.invalidCredentials");
     }
 
     await registrarAuditoria({
@@ -72,8 +64,7 @@ export const loginUsuario = async (req, res) => {
       rol: usuario.rol,
     });
 
-    return res.json({
-      mensaje: "Login exitoso",
+    return apiMessage(res, req, {
       token,
       usuario: {
         id_usuario: usuario.id_usuario,
@@ -84,10 +75,10 @@ export const loginUsuario = async (req, res) => {
         rol: usuario.rol,
         estado: usuario.estado,
       },
-    });
+    }, "auth.loginSuccess");
   } catch (error) {
     console.error("Error al hacer login:", error);
-    return res.status(500).json({ error: "Error interno al hacer login" });
+    return apiError(res, req, 500, "auth.loginError");
   }
 };
 
@@ -112,7 +103,7 @@ export const perfilUsuario = async (req, res) => {
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
+      return apiError(res, req, 404, "auth.userNotFound");
     }
 
     return res.json({
@@ -120,6 +111,6 @@ export const perfilUsuario = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al obtener perfil:", error);
-    return res.status(500).json({ error: "Error interno al obtener perfil" });
+    return apiError(res, req, 500, "auth.profileError");
   }
 };

@@ -1,4 +1,5 @@
 import { pool } from "../config/db.js";
+import { apiErrorText } from "../i18n/apiMessages.js";
 
 const formatearFechaISO = (fecha) => {
   if (!fecha) return null;
@@ -10,7 +11,13 @@ export const obtenerAgendaDia = async (req, res) => {
     const { fecha } = req.query;
 
     if (!fecha) {
-      return res.status(400).json({ error: "Debe enviar la fecha en formato YYYY-MM-DD" });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Debe enviar la fecha en formato YYYY-MM-DD",
+        "You must provide the date in YYYY-MM-DD format"
+      );
     }
 
     const programacionesQuery = `
@@ -105,7 +112,7 @@ export const obtenerAgendaDia = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al obtener agenda del día:", error);
-    return res.status(500).json({ error: "Error interno al obtener agenda del día" });
+    return apiErrorText(res, req, 500, "Error interno al obtener agenda del día", "Internal error while loading daily agenda");
   }
 };
 
@@ -114,9 +121,13 @@ export const obtenerAgendaRango = async (req, res) => {
     const { fecha_desde, fecha_hasta } = req.query;
 
     if (!fecha_desde || !fecha_hasta) {
-      return res.status(400).json({
-        error: "Debe enviar fecha_desde y fecha_hasta en formato YYYY-MM-DD",
-      });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Debe enviar fecha_desde y fecha_hasta en formato YYYY-MM-DD",
+        "You must provide fecha_desde and fecha_hasta in YYYY-MM-DD format"
+      );
     }
 
     const programacionesQuery = `
@@ -180,7 +191,7 @@ export const obtenerAgendaRango = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al obtener agenda por rango:", error);
-    return res.status(500).json({ error: "Error interno al obtener agenda por rango" });
+    return apiErrorText(res, req, 500, "Error interno al obtener agenda por rango", "Internal error while loading agenda by range");
   }
 };
 
@@ -189,14 +200,14 @@ export const obtenerCalendarioMensual = async (req, res) => {
     const { anio, mes } = req.query;
 
     if (!anio || !mes) {
-      return res.status(400).json({ error: "Debe enviar anio y mes" });
+      return apiErrorText(res, req, 400, "Debe enviar anio y mes", "You must provide year and month");
     }
 
     const year = Number(anio);
     const month = Number(mes);
 
     if (Number.isNaN(year) || Number.isNaN(month) || month < 1 || month > 12) {
-      return res.status(400).json({ error: "Mes o año inválidos" });
+      return apiErrorText(res, req, 400, "Mes o año inválidos", "Invalid month or year");
     }
 
     const fechaInicio = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -296,7 +307,7 @@ export const obtenerCalendarioMensual = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al obtener calendario mensual:", error);
-    return res.status(500).json({ error: "Error interno al obtener calendario mensual" });
+    return apiErrorText(res, req, 500, "Error interno al obtener calendario mensual", "Internal error while loading monthly calendar");
   }
 };
 
@@ -305,9 +316,13 @@ export const obtenerVencimientosCredito = async (req, res) => {
     const { fecha_desde, fecha_hasta, estado } = req.query;
 
     if (!fecha_desde || !fecha_hasta) {
-      return res.status(400).json({
-        error: "Debe enviar fecha_desde y fecha_hasta en formato YYYY-MM-DD",
-      });
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Debe enviar fecha_desde y fecha_hasta en formato YYYY-MM-DD",
+        "You must provide fecha_desde and fecha_hasta in YYYY-MM-DD format"
+      );
     }
 
     let query = `
@@ -345,6 +360,12 @@ export const obtenerVencimientosCredito = async (req, res) => {
     });
   } catch (error) {
     console.error("Error al obtener vencimientos de crédito:", error);
-    return res.status(500).json({ error: "Error interno al obtener vencimientos de crédito" });
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al obtener vencimientos de crédito",
+      "Internal error while loading credit due dates"
+    );
   }
 };
