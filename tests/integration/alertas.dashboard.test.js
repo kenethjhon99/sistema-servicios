@@ -43,6 +43,42 @@ describe("Alertas - dashboard base", () => {
       .mockResolvedValueOnce({
         rows: [
           {
+            id_cliente: 7,
+            cliente: "Cliente Riesgo",
+            creditos_vencidos: 2,
+            saldo_pendiente_total: 640,
+            max_dias_vencido: 18,
+            ultimo_pago_fecha: "2026-03-28",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id_cliente: 7,
+            saldo_pendiente_total: 640,
+            creditos_activos: 2,
+            max_dias_vencido: 18,
+            ultimo_seguimiento_resultado: "PROMESA_PAGO",
+            proximo_contacto: "2026-04-02",
+            id_usuario_responsable: 3,
+            usuario_responsable: "Collector One",
+          },
+          {
+            id_cliente: 8,
+            saldo_pendiente_total: 120,
+            creditos_activos: 1,
+            max_dias_vencido: 0,
+            ultimo_seguimiento_resultado: null,
+            proximo_contacto: null,
+            id_usuario_responsable: null,
+            usuario_responsable: null,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
             fecha: "2026-04-01",
             servicios_programados: 2,
             pagos_cobrados: 100,
@@ -77,6 +113,25 @@ describe("Alertas - dashboard base", () => {
       servicios_programados: 3,
       pagos_cobrados: 180.5,
       alertas_creadas: 1,
+    });
+    expect(res.body.cobranza_foco).toMatchObject({
+      total_clientes_prioritarios: 1,
+      saldo_prioritario_total: 640,
+      creditos_vencidos_total: 2,
+      seguimiento_resumen: {
+        promesas_pago: 1,
+        sin_respuesta: 0,
+        sin_seguimiento: 1,
+        contactos_vencidos: 1,
+      },
+    });
+    expect(res.body.cobranza_foco.clientes_prioritarios[0]).toMatchObject({
+      cliente: "Cliente Riesgo",
+      max_dias_vencido: 18,
+    });
+    expect(res.body.cobranza_foco.responsable_principal).toMatchObject({
+      usuario_responsable: "Collector One",
+      clientes: 1,
     });
   });
 
@@ -114,6 +169,8 @@ describe("Alertas - dashboard base", () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
 
     const res = await request(app)

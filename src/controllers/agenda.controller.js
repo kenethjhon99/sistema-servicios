@@ -29,6 +29,10 @@ export const obtenerAgendaDia = async (req, res) => {
       "programaciones_servicio",
       "id_empleado_responsable"
     );
+    const soportaSeguimientosCobranza = await hasPublicColumn(
+      "cobranza_seguimientos",
+      "id_seguimiento"
+    );
 
     const programacionesBaseSelect = `
       SELECT
@@ -178,11 +182,80 @@ export const obtenerAgendaDia = async (req, res) => {
       ORDER BY cr.id_credito DESC
     `;
 
-    const [programaciones, programacionesVencidas, ordenes, creditos] = await Promise.all([
+    const cobranzaAlertasQuery = `
+      SELECT
+        cr.id_credito,
+        cr.id_cliente,
+        c.nombre_completo AS cliente,
+        cr.id_orden_trabajo,
+        ot.numero_orden,
+        cr.estado,
+        cr.fecha_vencimiento,
+        COALESCE(cr.saldo_pendiente, 0)::numeric AS saldo_pendiente,
+        CASE
+          WHEN cr.fecha_vencimiento < $1 AND COALESCE(cr.saldo_pendiente, 0) > 0
+            THEN ($1::date - cr.fecha_vencimiento)::int
+          ELSE 0
+        END AS dias_vencido,
+        ${
+          soportaSeguimientosCobranza
+            ? `ultimo_seguimiento.fecha_seguimiento AS ultimo_seguimiento_fecha,
+        ultimo_seguimiento.resultado AS ultimo_seguimiento_resultado,
+        ultimo_seguimiento.proximo_contacto,
+        ultimo_seguimiento.notas AS ultima_nota_seguimiento`
+            : `NULL::date AS ultimo_seguimiento_fecha,
+        NULL::varchar AS ultimo_seguimiento_resultado,
+        NULL::date AS proximo_contacto,
+        NULL::text AS ultima_nota_seguimiento`
+        }
+      FROM creditos cr
+      INNER JOIN clientes c ON cr.id_cliente = c.id_cliente
+      INNER JOIN ordenes_trabajo ot ON cr.id_orden_trabajo = ot.id_orden_trabajo
+      ${
+        soportaSeguimientosCobranza
+          ? `
+      LEFT JOIN LATERAL (
+        SELECT
+          cs.fecha_seguimiento,
+          cs.resultado,
+          cs.proximo_contacto,
+          cs.notas
+        FROM cobranza_seguimientos cs
+        WHERE cs.id_credito = cr.id_credito
+           OR (cs.id_credito IS NULL AND cs.id_cliente = cr.id_cliente)
+        ORDER BY cs.fecha_seguimiento DESC, cs.id_seguimiento DESC
+        LIMIT 1
+      ) ultimo_seguimiento ON TRUE
+      `
+          : ""
+      }
+      WHERE cr.estado IN ('PENDIENTE', 'PARCIAL', 'VENCIDO')
+        AND COALESCE(cr.saldo_pendiente, 0) > 0
+        AND (
+          cr.fecha_vencimiento <= $1
+          ${
+            soportaSeguimientosCobranza
+              ? "OR ultimo_seguimiento.proximo_contacto <= $1"
+              : ""
+          }
+        )
+      ORDER BY
+        CASE
+          WHEN cr.fecha_vencimiento < $1 AND COALESCE(cr.saldo_pendiente, 0) > 0
+            THEN ($1::date - cr.fecha_vencimiento)::int
+          ELSE 0
+        END DESC,
+        COALESCE(cr.saldo_pendiente, 0) DESC,
+        cr.id_credito DESC
+      LIMIT 5
+    `;
+
+    const [programaciones, programacionesVencidas, ordenes, creditos, cobranzaAlertas] = await Promise.all([
       pool.query(programacionesQuery, [fecha]),
       pool.query(programacionesVencidasQuery, [fecha]),
       pool.query(ordenesQuery, [fecha]),
       pool.query(creditosQuery, [fecha]),
+      pool.query(cobranzaAlertasQuery, [fecha]),
     ]);
 
     return res.json({
@@ -191,11 +264,13 @@ export const obtenerAgendaDia = async (req, res) => {
       programaciones_vencidas: programacionesVencidas.rows,
       ordenes: ordenes.rows,
       vencimientos_credito: creditos.rows,
+      cobranza_alertas: cobranzaAlertas.rows,
       resumen: {
         total_programaciones: programaciones.rows.length,
         total_programaciones_vencidas: programacionesVencidas.rows.length,
         total_ordenes: ordenes.rows.length,
         total_vencimientos_credito: creditos.rows.length,
+        total_cobranza_alertas: cobranzaAlertas.rows.length,
       },
     });
   } catch (error) {

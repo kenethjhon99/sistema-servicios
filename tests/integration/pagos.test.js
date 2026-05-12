@@ -667,3 +667,244 @@ describe("PATCH /api/pagos/creditos/:id/estado", () => {
     expect(auditCall[1][2]).toBe("CAMBIAR_ESTADO");
   });
 });
+
+// =============================================================================
+// COBRANZA
+// =============================================================================
+describe("GET /api/pagos/cobranza/resumen", () => {
+  const cobrador = () => makeUsuario({ id_usuario: 12, rol: "COBRADOR" });
+
+  it("devuelve resumen agregado, buckets y ultimo pago por credito", async () => {
+    const auth = primeAuth(poolMock, cobrador());
+
+    poolMock.query
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id_credito: 1,
+            id_cliente: 7,
+            cliente: "Cliente Uno",
+            id_orden_trabajo: 90,
+            numero_orden: "ORD-090",
+            estado: "VENCIDO",
+            fecha_vencimiento: "2026-05-01",
+            monto_total: 500,
+            monto_pagado: 100,
+            saldo_pendiente: 400,
+            dias_vencido: 10,
+            ultimo_pago_fecha: "2026-05-02",
+            ultimo_pago_monto: 100,
+          },
+          {
+            id_credito: 2,
+            id_cliente: 8,
+            cliente: "Cliente Dos",
+            id_orden_trabajo: 91,
+            numero_orden: "ORD-091",
+            estado: "PARCIAL",
+            fecha_vencimiento: "2099-12-31",
+            monto_total: 250,
+            monto_pagado: 50,
+            saldo_pendiente: 200,
+            dias_vencido: 0,
+            ultimo_pago_fecha: "2026-05-05",
+            ultimo_pago_monto: 50,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ pagos_cobrados_rango: 150 }],
+      });
+
+    const res = await request(app)
+      .get("/api/pagos/cobranza/resumen?fecha_desde=2026-05-01&fecha_hasta=2026-05-31")
+      .set("Authorization", auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.resumen).toMatchObject({
+      saldo_pendiente_total: 600,
+      creditos_vencidos: 1,
+      creditos_parciales: 1,
+      pagos_cobrados_rango: 150,
+      clientes_con_saldo: 2,
+    });
+    expect(res.body.buckets.al_dia.count).toBe(1);
+    expect(res.body.buckets.vence_8_30.count).toBe(1);
+    expect(res.body.clientes[0]).toMatchObject({
+      id_credito: 1,
+      ultimo_pago_fecha: "2026-05-02",
+      ultimo_pago_monto: 100,
+    });
+    expect(res.body.reporte.clientes).toHaveLength(2);
+  });
+
+  it("aplica filtros por estado, cliente, solo vencidos y solo parciales", async () => {
+    const auth = primeAuth(poolMock, cobrador());
+
+    poolMock.query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ pagos_cobrados_rango: 0 }] });
+
+    const res = await request(app)
+      .get(
+        "/api/pagos/cobranza/resumen?estado=PARCIAL&id_cliente=9&solo_vencidos=true&solo_parciales=true"
+      )
+      .set("Authorization", auth);
+
+    expect(res.status).toBe(200);
+
+    const creditoQuery = String(poolMock.query.mock.calls[1][0]);
+    const creditoParams = poolMock.query.mock.calls[1][1];
+    const pagosParams = poolMock.query.mock.calls[2][1];
+
+    expect(creditoQuery).toMatch(/cr\.estado = \$1/i);
+    expect(creditoQuery).toMatch(/cr\.id_cliente = \$2/i);
+    expect(creditoQuery).toMatch(/cr\.fecha_vencimiento < CURRENT_DATE/i);
+    expect(creditoQuery).toMatch(/cr\.estado = 'PARCIAL'/i);
+    expect(creditoParams).toEqual(["PARCIAL", 9]);
+    expect(pagosParams).toEqual([9]);
+  });
+
+  it("responde 200 con listas vacias cuando no hay cobranza", async () => {
+    const auth = primeAuth(poolMock, cobrador());
+
+    poolMock.query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ pagos_cobrados_rango: 0 }] });
+
+    const res = await request(app)
+      .get("/api/pagos/cobranza/resumen")
+      .set("Authorization", auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.clientes).toEqual([]);
+    expect(res.body.resumen).toMatchObject({
+      saldo_pendiente_total: 0,
+      creditos_vencidos: 0,
+      creditos_parciales: 0,
+      pagos_cobrados_rango: 0,
+      clientes_con_saldo: 0,
+    });
+  });
+
+  it("mantiene errores ES/EN para filtros invalidos", async () => {
+    const auth = primeAuth(poolMock, cobrador());
+
+    const res = await request(app)
+      .get("/api/pagos/cobranza/resumen?estado=FANTASMA")
+      .set("Authorization", auth)
+      .set("X-App-Locale", "en");
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Invalid credit status");
+  });
+});
+
+describe("Cobranza - seguimientos por cliente", () => {
+  const cobrador = () => makeUsuario({ id_usuario: 7, rol: "COBRADOR" });
+
+  it("lista seguimientos de cobranza para un cliente", async () => {
+    const auth = primeAuth(poolMock, cobrador());
+    poolMock.query
+      .mockResolvedValueOnce({ rows: [{ id_cliente: 7 }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id_seguimiento: 4,
+            id_cliente: 7,
+            fecha_seguimiento: "2026-05-10",
+            medio_contacto: "LLAMADA",
+            resultado: "PROMESA_PAGO",
+            usuario_responsable: "Collector One",
+            notas: "Promete abono el lunes",
+          },
+        ],
+      });
+
+    const res = await request(app)
+      .get("/api/pagos/cobranza/seguimientos/cliente/7")
+      .set("Authorization", auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      id_seguimiento: 4,
+      resultado: "PROMESA_PAGO",
+    });
+  });
+
+  it("crea un seguimiento de cobranza y registra auditoria", async () => {
+    const auth = primeAuth(poolMock, cobrador());
+    poolMock.query
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id_usuario: 3,
+            nombre: "Collector One",
+            username: "collector",
+            correo: "collector@test.com",
+            estado: "ACTIVO",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id_cliente: 7, nombre_completo: "Client One" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ id_credito: 21, id_cliente: 7 }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id_seguimiento: 8,
+            id_cliente: 7,
+            id_credito: 21,
+            fecha_seguimiento: "2026-05-11",
+            medio_contacto: "WHATSAPP",
+            resultado: "PROMESA_PAGO",
+            id_usuario_responsable: 3,
+            notas: "Se comprometio a pagar el viernes",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const res = await request(app)
+      .post("/api/pagos/cobranza/seguimientos")
+      .set("Authorization", auth)
+      .send({
+        id_cliente: 7,
+        id_credito: 21,
+        medio_contacto: "WHATSAPP",
+        resultado: "PROMESA_PAGO",
+        notas: "Se comprometio a pagar el viernes",
+        id_usuario_responsable: 3,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id_seguimiento: 8,
+      medio_contacto: "WHATSAPP",
+      usuario_responsable: "Collector One",
+    });
+
+    const auditCall = poolMock.query.mock.calls.at(-1);
+    expect(auditCall[0]).toMatch(/INSERT INTO auditoria_eventos/i);
+  });
+
+  it("rechaza seguimiento sin notas", async () => {
+    const auth = primeAuth(poolMock, cobrador());
+
+    const res = await request(app)
+      .post("/api/pagos/cobranza/seguimientos")
+      .set("Authorization", auth)
+      .send({
+        id_cliente: 7,
+        medio_contacto: "LLAMADA",
+        resultado: "PENDIENTE",
+        notas: "",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/notas/i);
+  });
+});

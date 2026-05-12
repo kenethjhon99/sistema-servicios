@@ -8,6 +8,9 @@ import {
   obtenerCreditoPorId,
   cambiarEstadoCredito,
   aplicarPagoACredito,
+  obtenerResumenCobranza,
+  listarSeguimientosCobranzaCliente,
+  crearSeguimientoCobranza,
 } from "../controllers/pagos.controller.js";
 import { authRequired, requireRole } from "../middlewares/auth.middleware.js";
 import { validateIdParam, parsePagination } from "../middlewares/validators.middleware.js";
@@ -25,5 +28,24 @@ router.get("/creditos/:id", authRequired, validateIdParam(), obtenerCreditoPorId
 router.post("/creditos", authRequired, requireRole("ADMIN", "SUPERVISOR"), crearCredito);
 router.patch("/creditos/:id/estado", authRequired, requireRole("ADMIN"), validateIdParam(), cambiarEstadoCredito);
 router.post("/creditos/aplicar-pago", authRequired, requireRole("ADMIN", "SUPERVISOR", "COBRADOR"), aplicarPagoACredito);
+router.get(
+  "/cobranza/resumen",
+  authRequired,
+  requireRole("ADMIN", "SUPERVISOR", "COBRADOR"),
+  obtenerResumenCobranza
+);
+router.get(
+  "/cobranza/seguimientos/cliente/:id_cliente",
+  authRequired,
+  requireRole("ADMIN", "SUPERVISOR", "COBRADOR"),
+  validateIdParam("id_cliente"),
+  listarSeguimientosCobranzaCliente
+);
+router.post(
+  "/cobranza/seguimientos",
+  authRequired,
+  requireRole("ADMIN", "SUPERVISOR", "COBRADOR"),
+  crearSeguimientoCobranza
+);
 
 export default router;

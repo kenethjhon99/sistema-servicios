@@ -4,6 +4,8 @@ import { hasPublicColumn } from "../utils/schema.js";
 
 const resolveClienteDocumentColumn = async () =>
   (await hasPublicColumn("clientes", "id_documento")) ? "id_documento" : "dpi";
+const soportaResponsableSeguimientoCobranza = () =>
+  hasPublicColumn("cobranza_seguimientos", "id_usuario_responsable");
 
 export const obtenerResumenFinancieroOrden = async (req, res) => {
   try {
@@ -153,6 +155,10 @@ export const obtenerPerfilCompletoCliente = async (req, res) => {
   try {
     const { id_cliente } = req.params;
     const documentColumn = await resolveClienteDocumentColumn();
+    const soportaSeguimientosCobranza = await hasPublicColumn(
+      "cobranza_seguimientos",
+      "id_seguimiento"
+    );
 
     const clienteQuery = `
       SELECT *, ${documentColumn} AS id_documento
@@ -241,6 +247,38 @@ export const obtenerPerfilCompletoCliente = async (req, res) => {
 
     const creditosResult = await pool.query(creditosQuery, [id_cliente]);
 
+    let seguimientosCobranzaResult = { rows: [] };
+    if (soportaSeguimientosCobranza) {
+      const soportaResponsableSeguimiento = await soportaResponsableSeguimientoCobranza();
+      seguimientosCobranzaResult = await pool.query(
+        `
+          SELECT
+            cs.*,
+            ${
+              soportaResponsableSeguimiento
+                ? `COALESCE(ur.nombre, ur.username, ur.correo) AS usuario_responsable,`
+                : `NULL::varchar AS usuario_responsable,`
+            }
+            ot.numero_orden
+          FROM cobranza_seguimientos cs
+          ${
+            soportaResponsableSeguimiento
+              ? `LEFT JOIN usuarios ur
+            ON cs.id_usuario_responsable = ur.id_usuario`
+              : ""
+          }
+          LEFT JOIN creditos cr
+            ON cs.id_credito = cr.id_credito
+          LEFT JOIN ordenes_trabajo ot
+            ON cr.id_orden_trabajo = ot.id_orden_trabajo
+          WHERE cs.id_cliente = $1
+          ORDER BY cs.fecha_seguimiento DESC, cs.id_seguimiento DESC
+          LIMIT 20
+        `,
+        [id_cliente]
+      );
+    }
+
     const resumenFinancieroQuery = `
       SELECT
         COALESCE((
@@ -286,6 +324,7 @@ export const obtenerPerfilCompletoCliente = async (req, res) => {
       ordenes: ordenesResult.rows,
       pagos: pagosResult.rows,
       creditos: creditosResult.rows,
+      cobranza_seguimientos: seguimientosCobranzaResult.rows,
       resumen: resumenFinancieroResult.rows[0],
     });
   } catch (error) {

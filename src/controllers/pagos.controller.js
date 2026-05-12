@@ -1,6 +1,7 @@
 import { pool } from "../config/db.js";
 import { apiErrorText } from "../i18n/apiMessages.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
+import { hasPublicColumn } from "../utils/schema.js";
 
 const METODOS_PAGO_VALIDOS = [
   "EFECTIVO",
@@ -17,7 +18,96 @@ const ESTADOS_CREDITO_VALIDOS = [
   "VENCIDO",
   "CANCELADO",
 ];
+const MEDIOS_SEGUIMIENTO_VALIDOS = ["LLAMADA", "WHATSAPP", "CORREO", "VISITA", "OTRO"];
+const RESULTADOS_SEGUIMIENTO_VALIDOS = [
+  "PENDIENTE",
+  "SIN_RESPUESTA",
+  "PROMESA_PAGO",
+  "ABONO_REALIZADO",
+  "REAGENDADO",
+  "DISPUTA",
+  "RECORDATORIO",
+];
 const formatCurrencyLabel = (value) => `$${Number(value || 0).toFixed(2)}`;
+const COLLECTION_DEFAULT_ACTIVE_STATES = ["PENDIENTE", "PARCIAL", "VENCIDO"];
+const BOOLEAN_TRUE_VALUES = new Set(["true", "1", "yes", "si"]);
+
+const parseBooleanQuery = (value) => BOOLEAN_TRUE_VALUES.has(String(value || "").toLowerCase());
+
+const roundMoney = (value) => Number(Number(value || 0).toFixed(2));
+
+const buildSeguimientoDescription = ({ cliente, medio_contacto, resultado, fecha_seguimiento }) =>
+  `Seguimiento de cobranza para ${cliente} por ${medio_contacto} con resultado ${resultado} en ${fecha_seguimiento}`;
+
+const soportaSeguimientosCobranza = () =>
+  hasPublicColumn("cobranza_seguimientos", "id_seguimiento");
+const soportaResponsableSeguimientoCobranza = () =>
+  hasPublicColumn("cobranza_seguimientos", "id_usuario_responsable");
+
+const buildCobranzaCreditoFilters = ({ estado, id_cliente, solo_vencidos, solo_parciales }) => {
+  const conditions = ["1=1"];
+  const values = [];
+  let index = 1;
+
+  if (estado) {
+    conditions.push(`cr.estado = $${index}`);
+    values.push(estado.toUpperCase());
+    index += 1;
+  } else {
+    conditions.push(`cr.estado = ANY($${index})`);
+    values.push(COLLECTION_DEFAULT_ACTIVE_STATES);
+    index += 1;
+  }
+
+  if (id_cliente) {
+    conditions.push(`cr.id_cliente = $${index}`);
+    values.push(Number(id_cliente));
+    index += 1;
+  }
+
+  if (solo_parciales) {
+    conditions.push(`cr.estado = 'PARCIAL'`);
+  }
+
+  if (solo_vencidos) {
+    conditions.push(`cr.fecha_vencimiento < CURRENT_DATE`);
+    conditions.push(`COALESCE(cr.saldo_pendiente, 0) > 0`);
+  }
+
+  return {
+    whereClause: `WHERE ${conditions.join(" AND ")}`,
+    values,
+  };
+};
+
+const buildCobranzaPagoFilters = ({ fecha_desde, fecha_hasta, id_cliente }) => {
+  const conditions = ["p.fecha_pago IS NOT NULL"];
+  const values = [];
+  let index = 1;
+
+  if (id_cliente) {
+    conditions.push(`p.id_cliente = $${index}`);
+    values.push(Number(id_cliente));
+    index += 1;
+  }
+
+  if (fecha_desde) {
+    conditions.push(`p.fecha_pago >= $${index}`);
+    values.push(fecha_desde);
+    index += 1;
+  }
+
+  if (fecha_hasta) {
+    conditions.push(`p.fecha_pago <= $${index}`);
+    values.push(fecha_hasta);
+    index += 1;
+  }
+
+  return {
+    whereClause: `WHERE ${conditions.join(" AND ")}`,
+    values,
+  };
+};
 
 const recalcularEstadoCredito = (montoTotal, montoPagado, fechaVencimiento) => {
   const total = Number(montoTotal);
@@ -448,6 +538,236 @@ export const listarCreditos = async (req, res) => {
   }
 };
 
+export const obtenerResumenCobranza = async (req, res) => {
+  try {
+    const { fecha_desde, fecha_hasta, estado, id_cliente } = req.query;
+    const solo_vencidos = parseBooleanQuery(req.query.solo_vencidos);
+    const solo_parciales = parseBooleanQuery(req.query.solo_parciales);
+    const [tieneSeguimientosCobranza, tieneResponsableSeguimientoCobranza] = await Promise.all([
+      soportaSeguimientosCobranza(),
+      soportaResponsableSeguimientoCobranza(),
+    ]);
+
+    if (id_cliente && !/^\d+$/.test(String(id_cliente))) {
+      return apiErrorText(res, req, 400, "El cliente es inválido", "Client is invalid");
+    }
+
+    if (estado && !ESTADOS_CREDITO_VALIDOS.includes(estado.toUpperCase())) {
+      return apiErrorText(res, req, 400, "Estado de crédito inválido", "Invalid credit status");
+    }
+
+    const creditoFilters = buildCobranzaCreditoFilters({
+      estado,
+      id_cliente,
+      solo_vencidos,
+      solo_parciales,
+    });
+
+    const creditosQuery = `
+      SELECT
+        cr.id_credito,
+        cr.id_cliente,
+        c.nombre_completo AS cliente,
+        cr.id_orden_trabajo,
+        ot.numero_orden,
+        cr.estado,
+        cr.fecha_vencimiento,
+        COALESCE(cr.monto_total, 0)::numeric AS monto_total,
+        COALESCE(cr.monto_pagado, 0)::numeric AS monto_pagado,
+        COALESCE(cr.saldo_pendiente, 0)::numeric AS saldo_pendiente,
+        CASE
+          WHEN cr.fecha_vencimiento < CURRENT_DATE AND COALESCE(cr.saldo_pendiente, 0) > 0
+            THEN (CURRENT_DATE - cr.fecha_vencimiento)::int
+          ELSE 0
+        END AS dias_vencido,
+        ultimo_pago.ultimo_pago_fecha,
+        ultimo_pago.ultimo_pago_monto,
+        ${
+          tieneSeguimientosCobranza
+            ? `ultimo_seguimiento.id_seguimiento,
+        ultimo_seguimiento.fecha_seguimiento AS ultimo_seguimiento_fecha,
+        ultimo_seguimiento.medio_contacto AS ultimo_seguimiento_medio,
+        ultimo_seguimiento.resultado AS ultimo_seguimiento_resultado,
+        ultimo_seguimiento.proximo_contacto,
+        ultimo_seguimiento.notas AS ultima_nota_seguimiento,
+        ${
+          tieneResponsableSeguimientoCobranza
+            ? `ultimo_seguimiento.id_usuario_responsable,
+        ultimo_seguimiento.usuario_responsable`
+            : `NULL::bigint AS id_usuario_responsable,
+        NULL::varchar AS usuario_responsable`
+        }`
+            : `NULL::bigint AS id_seguimiento,
+        NULL::date AS ultimo_seguimiento_fecha,
+        NULL::varchar AS ultimo_seguimiento_medio,
+        NULL::varchar AS ultimo_seguimiento_resultado,
+        NULL::date AS proximo_contacto,
+        NULL::text AS ultima_nota_seguimiento,
+        NULL::bigint AS id_usuario_responsable,
+        NULL::varchar AS usuario_responsable`
+        }
+      FROM creditos cr
+      INNER JOIN clientes c
+        ON cr.id_cliente = c.id_cliente
+      INNER JOIN ordenes_trabajo ot
+        ON cr.id_orden_trabajo = ot.id_orden_trabajo
+      LEFT JOIN LATERAL (
+        SELECT
+          p.fecha_pago AS ultimo_pago_fecha,
+          pc.monto_aplicado AS ultimo_pago_monto
+        FROM pagos_credito pc
+        INNER JOIN pagos p
+          ON pc.id_pago = p.id_pago
+        WHERE pc.id_credito = cr.id_credito
+        ORDER BY p.fecha_pago DESC NULLS LAST, pc.id_pago_credito DESC
+        LIMIT 1
+      ) ultimo_pago ON TRUE
+      ${
+        tieneSeguimientosCobranza
+          ? `
+      LEFT JOIN LATERAL (
+        SELECT
+          cs.id_seguimiento,
+          cs.fecha_seguimiento,
+          cs.medio_contacto,
+          cs.resultado,
+          cs.proximo_contacto,
+          cs.notas,
+          ${
+            tieneResponsableSeguimientoCobranza
+              ? `cs.id_usuario_responsable,
+          COALESCE(ur.nombre, ur.username, ur.correo) AS usuario_responsable`
+              : `NULL::bigint AS id_usuario_responsable,
+          NULL::varchar AS usuario_responsable`
+          }
+        FROM cobranza_seguimientos cs
+        ${
+          tieneResponsableSeguimientoCobranza
+            ? `LEFT JOIN usuarios ur
+          ON cs.id_usuario_responsable = ur.id_usuario`
+            : ""
+        }
+        WHERE cs.id_credito = cr.id_credito
+           OR (cs.id_credito IS NULL AND cs.id_cliente = cr.id_cliente)
+        ORDER BY cs.fecha_seguimiento DESC, cs.id_seguimiento DESC
+        LIMIT 1
+      ) ultimo_seguimiento ON TRUE
+      `
+          : ""
+      }
+      ${creditoFilters.whereClause}
+      ORDER BY
+        CASE
+          WHEN cr.fecha_vencimiento < CURRENT_DATE AND COALESCE(cr.saldo_pendiente, 0) > 0
+            THEN (CURRENT_DATE - cr.fecha_vencimiento)::int
+          ELSE 0
+        END DESC,
+        cr.fecha_vencimiento ASC,
+        cr.id_credito DESC
+    `;
+
+    const pagosFilters = buildCobranzaPagoFilters({
+      fecha_desde,
+      fecha_hasta,
+      id_cliente,
+    });
+
+    const pagosQuery = `
+      SELECT COALESCE(SUM(p.monto), 0)::numeric AS pagos_cobrados_rango
+      FROM pagos p
+      ${pagosFilters.whereClause}
+    `;
+
+    const [creditosResult, pagosResult] = await Promise.all([
+      pool.query(creditosQuery, creditoFilters.values),
+      pool.query(pagosQuery, pagosFilters.values),
+    ]);
+
+    const clientes = creditosResult.rows.map((row) => ({
+      ...row,
+      monto_total: roundMoney(row.monto_total),
+      monto_pagado: roundMoney(row.monto_pagado),
+      saldo_pendiente: roundMoney(row.saldo_pendiente),
+      dias_vencido: Number(row.dias_vencido || 0),
+      ultimo_pago_monto:
+        row.ultimo_pago_monto === null ? null : roundMoney(row.ultimo_pago_monto),
+      id_seguimiento: row.id_seguimiento ? Number(row.id_seguimiento) : null,
+      id_usuario_responsable: row.id_usuario_responsable
+        ? Number(row.id_usuario_responsable)
+        : null,
+    }));
+
+    const initialBucket = () => ({ count: 0, saldo_pendiente: 0 });
+    const buckets = {
+      al_dia: initialBucket(),
+      vence_1_7: initialBucket(),
+      vence_8_30: initialBucket(),
+      vence_31_mas: initialBucket(),
+    };
+
+    clientes.forEach((row) => {
+      let bucketKey = "al_dia";
+      if (row.dias_vencido >= 31) {
+        bucketKey = "vence_31_mas";
+      } else if (row.dias_vencido >= 8) {
+        bucketKey = "vence_8_30";
+      } else if (row.dias_vencido >= 1) {
+        bucketKey = "vence_1_7";
+      }
+
+      buckets[bucketKey].count += 1;
+      buckets[bucketKey].saldo_pendiente = roundMoney(
+        buckets[bucketKey].saldo_pendiente + row.saldo_pendiente
+      );
+    });
+
+    const resumen = {
+      saldo_pendiente_total: roundMoney(
+        clientes.reduce((sum, row) => sum + Number(row.saldo_pendiente || 0), 0)
+      ),
+      creditos_vencidos: clientes.filter((row) => row.dias_vencido > 0).length,
+      creditos_parciales: clientes.filter((row) => row.estado === "PARCIAL").length,
+      pagos_cobrados_rango: roundMoney(pagosResult.rows[0]?.pagos_cobrados_rango || 0),
+      clientes_con_saldo: new Set(
+        clientes
+          .filter((row) => Number(row.saldo_pendiente || 0) > 0)
+          .map((row) => String(row.id_cliente))
+      ).size,
+    };
+
+    const reporte = {
+      generado_en: new Date().toISOString(),
+      filtros: {
+        fecha_desde: fecha_desde || null,
+        fecha_hasta: fecha_hasta || null,
+        estado: estado?.toUpperCase() || null,
+        id_cliente: id_cliente ? Number(id_cliente) : null,
+        solo_vencidos,
+        solo_parciales,
+      },
+      resumen,
+      buckets,
+      clientes,
+    };
+
+    return res.json({
+      resumen,
+      buckets,
+      clientes,
+      reporte,
+    });
+  } catch (error) {
+    console.error("Error al obtener resumen de cobranza:", error);
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al obtener cobranza",
+      "Internal error while loading collections"
+    );
+  }
+};
+
 export const obtenerCreditoPorId = async (req, res) => {
   try {
     const { id } = req.params;
@@ -730,5 +1050,297 @@ export const aplicarPagoACredito = async (req, res) => {
     return apiErrorText(res, req, 500, "Error interno al aplicar pago a crédito", "Internal error while applying payment to credit");
   } finally {
     client.release();
+  }
+};
+
+export const listarSeguimientosCobranzaCliente = async (req, res) => {
+  try {
+    const { id_cliente } = req.params;
+    const [soportaSeguimientos, soportaResponsableSeguimiento] = await Promise.all([
+      soportaSeguimientosCobranza(),
+      soportaResponsableSeguimientoCobranza(),
+    ]);
+
+    if (!soportaSeguimientos) {
+      return res.json([]);
+    }
+
+    const clienteResult = await pool.query(
+      `SELECT id_cliente FROM clientes WHERE id_cliente = $1`,
+      [id_cliente]
+    );
+
+    if (clienteResult.rows.length === 0) {
+      return apiErrorText(res, req, 404, "Cliente no encontrado", "Client not found");
+    }
+
+    const query = `
+      SELECT
+        cs.*,
+        c.nombre_completo AS cliente,
+        ${
+          soportaResponsableSeguimiento
+            ? `COALESCE(ur.nombre, ur.username, ur.correo) AS usuario_responsable`
+            : `NULL::varchar AS usuario_responsable`
+        },
+        ot.numero_orden
+      FROM cobranza_seguimientos cs
+      INNER JOIN clientes c
+        ON cs.id_cliente = c.id_cliente
+      ${
+        soportaResponsableSeguimiento
+          ? `LEFT JOIN usuarios ur
+        ON cs.id_usuario_responsable = ur.id_usuario`
+          : ""
+      }
+      LEFT JOIN creditos cr
+        ON cs.id_credito = cr.id_credito
+      LEFT JOIN ordenes_trabajo ot
+        ON cr.id_orden_trabajo = ot.id_orden_trabajo
+      WHERE cs.id_cliente = $1
+      ORDER BY cs.fecha_seguimiento DESC, cs.id_seguimiento DESC
+    `;
+
+    const result = await pool.query(query, [id_cliente]);
+    return res.json(result.rows);
+  } catch (error) {
+    console.error("Error al listar seguimientos de cobranza:", error);
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al listar seguimientos de cobranza",
+      "Internal error while listing collection follow-ups"
+    );
+  }
+};
+
+export const crearSeguimientoCobranza = async (req, res) => {
+  try {
+    const [soportaSeguimientos, soportaResponsableSeguimiento] = await Promise.all([
+      soportaSeguimientosCobranza(),
+      soportaResponsableSeguimientoCobranza(),
+    ]);
+
+    if (!soportaSeguimientos) {
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Debes correr las migraciones de cobranza antes de registrar seguimientos",
+        "You must run collections migrations before registering follow-ups"
+      );
+    }
+
+    const {
+      id_cliente,
+      id_credito,
+      fecha_seguimiento,
+      medio_contacto,
+      resultado,
+      proximo_contacto,
+      notas,
+      id_usuario_responsable,
+    } = req.body;
+
+    if (!id_cliente) {
+      return apiErrorText(res, req, 400, "El cliente es obligatorio", "Client is required");
+    }
+
+    if (!notas?.trim()) {
+      return apiErrorText(res, req, 400, "Las notas son obligatorias", "Notes are required");
+    }
+
+    if (
+      !medio_contacto ||
+      !MEDIOS_SEGUIMIENTO_VALIDOS.includes(String(medio_contacto).toUpperCase())
+    ) {
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Medio de contacto invalido",
+        "Invalid contact method"
+      );
+    }
+
+    if (!resultado || !RESULTADOS_SEGUIMIENTO_VALIDOS.includes(String(resultado).toUpperCase())) {
+      return apiErrorText(
+        res,
+        req,
+        400,
+        "Resultado de seguimiento invalido",
+        "Invalid follow-up result"
+      );
+    }
+
+    let usuarioResponsable = null;
+    if (soportaResponsableSeguimiento) {
+      if (!id_usuario_responsable) {
+        return apiErrorText(
+          res,
+          req,
+          400,
+          "Debes asignar un responsable interno",
+          "You must assign an internal owner"
+        );
+      }
+
+      const responsableResult = await pool.query(
+        `
+          SELECT id_usuario, nombre, username, correo, estado
+          FROM usuarios
+          WHERE id_usuario = $1
+        `,
+        [id_usuario_responsable]
+      );
+
+      if (responsableResult.rows.length === 0) {
+        return apiErrorText(
+          res,
+          req,
+          404,
+          "Responsable no encontrado",
+          "Owner not found"
+        );
+      }
+
+      usuarioResponsable = responsableResult.rows[0];
+      if (usuarioResponsable.estado !== "ACTIVO") {
+        return apiErrorText(
+          res,
+          req,
+          400,
+          "El responsable debe estar activo",
+          "The owner must be active"
+        );
+      }
+    }
+
+    const clienteResult = await pool.query(
+      `SELECT id_cliente, nombre_completo FROM clientes WHERE id_cliente = $1`,
+      [id_cliente]
+    );
+
+    if (clienteResult.rows.length === 0) {
+      return apiErrorText(res, req, 404, "Cliente no encontrado", "Client not found");
+    }
+
+    let credito = null;
+    if (id_credito) {
+      const creditoResult = await pool.query(
+        `
+          SELECT
+            cr.id_credito,
+            cr.id_cliente
+          FROM creditos cr
+          WHERE cr.id_credito = $1
+        `,
+        [id_credito]
+      );
+
+      if (creditoResult.rows.length === 0) {
+        return apiErrorText(res, req, 404, "Credito no encontrado", "Credit not found");
+      }
+
+      credito = creditoResult.rows[0];
+      if (Number(credito.id_cliente) !== Number(id_cliente)) {
+        return apiErrorText(
+          res,
+          req,
+          400,
+          "El credito no pertenece al cliente seleccionado",
+          "The credit does not belong to the selected client"
+        );
+      }
+    }
+
+    const values = [
+      Number(id_cliente),
+      id_credito ? Number(id_credito) : null,
+      fecha_seguimiento || null,
+      String(medio_contacto).toUpperCase(),
+      String(resultado).toUpperCase(),
+      proximo_contacto || null,
+      notas.trim(),
+      req.user?.id_usuario || null,
+      req.user?.id_usuario || null,
+    ];
+
+    const insertQuery = soportaResponsableSeguimiento
+      ? `
+        INSERT INTO cobranza_seguimientos (
+          id_cliente,
+          id_credito,
+          fecha_seguimiento,
+          medio_contacto,
+          resultado,
+          proximo_contacto,
+          notas,
+          id_usuario_responsable,
+          created_by,
+          updated_by
+        )
+        VALUES ($1,$2,COALESCE($3, CURRENT_DATE),$4,$5,$6,$7,$8,$9,$10)
+        RETURNING *
+      `
+      : `
+        INSERT INTO cobranza_seguimientos (
+          id_cliente,
+          id_credito,
+          fecha_seguimiento,
+          medio_contacto,
+          resultado,
+          proximo_contacto,
+          notas,
+          created_by,
+          updated_by
+        )
+        VALUES ($1,$2,COALESCE($3, CURRENT_DATE),$4,$5,$6,$7,$8,$9)
+        RETURNING *
+      `;
+
+    const insertValues = soportaResponsableSeguimiento
+      ? [...values.slice(0, 7), Number(id_usuario_responsable), ...values.slice(7)]
+      : values;
+
+    const result = await pool.query(insertQuery, insertValues);
+
+    const seguimiento = result.rows[0];
+    const cliente = clienteResult.rows[0];
+    if (usuarioResponsable) {
+      seguimiento.usuario_responsable =
+        usuarioResponsable.nombre || usuarioResponsable.username || usuarioResponsable.correo;
+    }
+    const descripcionResponsable = usuarioResponsable
+      ? ` con responsable ${
+          usuarioResponsable.nombre || usuarioResponsable.username || usuarioResponsable.correo
+        }`
+      : "";
+
+    await registrarAuditoria({
+      tabla_afectada: "cobranza_seguimientos",
+      id_registro: seguimiento.id_seguimiento,
+      accion: "SEGUIMIENTO",
+      descripcion: buildSeguimientoDescription({
+        cliente: cliente.nombre_completo,
+        medio_contacto: seguimiento.medio_contacto,
+        resultado: seguimiento.resultado,
+        fecha_seguimiento: seguimiento.fecha_seguimiento,
+      }) + descripcionResponsable,
+      valores_nuevos: seguimiento,
+      realizado_por: req.user?.id_usuario || null,
+    });
+
+    return res.status(201).json(seguimiento);
+  } catch (error) {
+    console.error("Error al crear seguimiento de cobranza:", error);
+    return apiErrorText(
+      res,
+      req,
+      500,
+      "Error interno al crear seguimiento de cobranza",
+      "Internal error while creating collection follow-up"
+    );
   }
 };

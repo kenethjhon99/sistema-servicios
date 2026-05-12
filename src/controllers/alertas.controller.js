@@ -2,6 +2,7 @@ import { pool } from "../config/db.js";
 import { localizeAlerts } from "../i18n/operaciones.js";
 import { resolveApiLocale } from "../utils/apiLocale.js";
 import { registrarAuditoria } from "../utils/auditoria.js";
+import { hasPublicColumn } from "../utils/schema.js";
 
 const TIPOS_ALERTA = [
   "SERVICIO_HOY",
@@ -14,6 +15,10 @@ const TIPOS_ALERTA = [
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_DASHBOARD_RANGE_DAYS = 92;
 const formatCurrencyLabel = (value) => `$${Number(value || 0).toFixed(2)}`;
+const soportaSeguimientosCobranza = () =>
+  hasPublicColumn("cobranza_seguimientos", "id_seguimiento");
+const soportaResponsableSeguimientoCobranza = () =>
+  hasPublicColumn("cobranza_seguimientos", "id_usuario_responsable");
 
 const toIsoDate = (date) => {
   const year = date.getFullYear();
@@ -666,6 +671,119 @@ export const obtenerDashboardBase = async (_req, res) => {
       [fecha_desde, fecha_hasta]
     );
 
+    const cobranzaFoco = await pool.query(
+      `
+        SELECT
+          c.id_cliente,
+          c.nombre_completo AS cliente,
+          COUNT(*) FILTER (
+            WHERE cr.fecha_vencimiento < CURRENT_DATE
+              AND cr.estado IN ('PENDIENTE', 'PARCIAL', 'VENCIDO')
+          )::int AS creditos_vencidos,
+          COALESCE(SUM(cr.saldo_pendiente), 0)::numeric AS saldo_pendiente_total,
+          COALESCE(
+            MAX(
+              CASE
+                WHEN cr.fecha_vencimiento < CURRENT_DATE
+                  THEN (CURRENT_DATE - cr.fecha_vencimiento)
+                ELSE 0
+              END
+            ),
+            0
+          )::int AS max_dias_vencido,
+          MAX(ultimo_pago.fecha_pago)::date AS ultimo_pago_fecha
+        FROM creditos cr
+        INNER JOIN clientes c
+          ON c.id_cliente = cr.id_cliente
+        LEFT JOIN LATERAL (
+          SELECT p.fecha_pago
+          FROM pagos_credito pc
+          INNER JOIN pagos p
+            ON p.id_pago = pc.id_pago
+          WHERE pc.id_credito = cr.id_credito
+          ORDER BY p.fecha_pago DESC, p.id_pago DESC
+          LIMIT 1
+        ) ultimo_pago ON true
+        WHERE cr.estado IN ('PENDIENTE', 'PARCIAL', 'VENCIDO')
+        GROUP BY c.id_cliente, c.nombre_completo
+        HAVING COALESCE(SUM(cr.saldo_pendiente), 0) > 0
+        ORDER BY
+          max_dias_vencido DESC,
+          saldo_pendiente_total DESC,
+          c.nombre_completo ASC
+        LIMIT 3
+      `
+    );
+
+    const [tieneSeguimientosCobranza, tieneResponsableSeguimientoCobranza] = await Promise.all([
+      soportaSeguimientosCobranza(),
+      soportaResponsableSeguimientoCobranza(),
+    ]);
+
+    let cobranzaSeguimientoDashboard = { rows: [] };
+    if (tieneSeguimientosCobranza) {
+      cobranzaSeguimientoDashboard = await pool.query(
+        `
+          WITH cartera_activa AS (
+            SELECT
+              cr.id_cliente,
+              COALESCE(SUM(cr.saldo_pendiente), 0)::numeric AS saldo_pendiente_total,
+              COUNT(*) FILTER (
+                WHERE cr.estado IN ('PENDIENTE', 'PARCIAL', 'VENCIDO')
+              )::int AS creditos_activos,
+              COALESCE(MAX(
+                CASE
+                  WHEN cr.fecha_vencimiento < CURRENT_DATE AND COALESCE(cr.saldo_pendiente, 0) > 0
+                    THEN (CURRENT_DATE - cr.fecha_vencimiento)::int
+                  ELSE 0
+                END
+              ), 0)::int AS max_dias_vencido
+            FROM creditos cr
+            WHERE cr.estado IN ('PENDIENTE', 'PARCIAL', 'VENCIDO')
+            GROUP BY cr.id_cliente
+            HAVING COALESCE(SUM(cr.saldo_pendiente), 0) > 0
+          )
+          SELECT
+            cartera_activa.id_cliente,
+            cartera_activa.saldo_pendiente_total,
+            cartera_activa.creditos_activos,
+            cartera_activa.max_dias_vencido,
+            ultimo_seguimiento.resultado AS ultimo_seguimiento_resultado,
+            ultimo_seguimiento.proximo_contacto,
+            ${
+              tieneResponsableSeguimientoCobranza
+                ? `ultimo_seguimiento.id_usuario_responsable,
+            ultimo_seguimiento.usuario_responsable`
+                : `NULL::bigint AS id_usuario_responsable,
+            NULL::varchar AS usuario_responsable`
+            }
+          FROM cartera_activa
+          LEFT JOIN LATERAL (
+            SELECT
+              cs.resultado,
+              cs.proximo_contacto,
+              ${
+                tieneResponsableSeguimientoCobranza
+                  ? `cs.id_usuario_responsable,
+              COALESCE(ur.nombre, ur.username, ur.correo) AS usuario_responsable`
+                  : `NULL::bigint AS id_usuario_responsable,
+              NULL::varchar AS usuario_responsable`
+              }
+            FROM cobranza_seguimientos cs
+            ${
+              tieneResponsableSeguimientoCobranza
+                ? `LEFT JOIN usuarios ur
+              ON cs.id_usuario_responsable = ur.id_usuario`
+                : ""
+            }
+            WHERE cs.id_cliente = cartera_activa.id_cliente
+            ORDER BY cs.fecha_seguimiento DESC, cs.id_seguimiento DESC
+            LIMIT 1
+          ) ultimo_seguimiento ON TRUE
+        `
+      );
+    }
+
     const serieDiaria = await pool.query(
       `
         WITH serie AS (
@@ -722,6 +840,91 @@ export const obtenerDashboardBase = async (_req, res) => {
       { servicios_programados: 0, pagos_cobrados: 0, alertas_creadas: 0 }
     );
 
+    const clientesPrioritarios = cobranzaFoco.rows.map((item) => ({
+      ...item,
+      saldo_pendiente_total: Number(item.saldo_pendiente_total || 0),
+    }));
+
+    const seguimientoRows = cobranzaSeguimientoDashboard.rows.map((item) => ({
+      ...item,
+      saldo_pendiente_total: Number(item.saldo_pendiente_total || 0),
+      id_usuario_responsable: item.id_usuario_responsable
+        ? Number(item.id_usuario_responsable)
+        : null,
+    }));
+
+    const seguimientoResumen = seguimientoRows.reduce(
+      (acc, item) => {
+        const key = item.ultimo_seguimiento_resultado || "SIN_SEGUIMIENTO";
+        if (!acc.estados[key]) {
+          acc.estados[key] = { count: 0, balance: 0 };
+        }
+        acc.estados[key].count += 1;
+        acc.estados[key].balance += Number(item.saldo_pendiente_total || 0);
+        if (item.proximo_contacto && item.proximo_contacto <= fecha_hasta) {
+          acc.contactos_vencidos += 1;
+        }
+        return acc;
+      },
+      {
+        contactos_vencidos: 0,
+        estados: {
+          PROMESA_PAGO: { count: 0, balance: 0 },
+          SIN_RESPUESTA: { count: 0, balance: 0 },
+          SIN_SEGUIMIENTO: { count: 0, balance: 0 },
+        },
+      }
+    );
+
+    const responsablesSeguimiento = seguimientoRows.reduce((acc, item) => {
+      if (!item.id_usuario_responsable) return acc;
+      const key = String(item.id_usuario_responsable);
+      if (!acc.has(key)) {
+        acc.set(key, {
+          id_usuario: item.id_usuario_responsable,
+          usuario_responsable: item.usuario_responsable,
+          clientes: 0,
+          saldo_pendiente_total: 0,
+        });
+      }
+      const current = acc.get(key);
+      current.clientes += 1;
+      current.saldo_pendiente_total += Number(item.saldo_pendiente_total || 0);
+      return acc;
+    }, new Map());
+
+    const responsablePrincipal =
+      Array.from(responsablesSeguimiento.values())
+        .sort((a, b) => {
+          if (b.clientes !== a.clientes) return b.clientes - a.clientes;
+          return b.saldo_pendiente_total - a.saldo_pendiente_total;
+        })[0] || null;
+
+    const resumenCobranzaFoco = {
+      clientes_prioritarios: clientesPrioritarios,
+      total_clientes_prioritarios: clientesPrioritarios.length,
+      saldo_prioritario_total: clientesPrioritarios.reduce(
+        (acc, item) => acc + Number(item.saldo_pendiente_total || 0),
+        0
+      ),
+      creditos_vencidos_total: clientesPrioritarios.reduce(
+        (acc, item) => acc + Number(item.creditos_vencidos || 0),
+        0
+      ),
+      seguimiento_resumen: {
+        promesas_pago: seguimientoResumen.estados.PROMESA_PAGO.count,
+        sin_respuesta: seguimientoResumen.estados.SIN_RESPUESTA.count,
+        sin_seguimiento: seguimientoResumen.estados.SIN_SEGUIMIENTO.count,
+        contactos_vencidos: seguimientoResumen.contactos_vencidos,
+      },
+      responsable_principal: responsablePrincipal
+        ? {
+            ...responsablePrincipal,
+            saldo_pendiente_total: Number(responsablePrincipal.saldo_pendiente_total || 0),
+          }
+        : null,
+    };
+
     return res.json({
       periodo: { fecha_desde, fecha_hasta },
       resumen: {
@@ -736,6 +939,7 @@ export const obtenerDashboardBase = async (_req, res) => {
       },
       serie_diaria: serieDiaria.rows,
       totales_periodo: totalesPeriodo,
+      cobranza_foco: resumenCobranzaFoco,
       ultimas_alertas: localizeAlerts(ultimasAlertas.rows, locale),
     });
   } catch (error) {
